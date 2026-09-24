@@ -29,10 +29,14 @@ export interface CameraState {
 export type LevelRequest = (
     | { kind: 'web' }
     | { kind: 'galaxy'; galaxy: import('./mandelbrot').GalaxySpec }
-    | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number } | 'sun' }
+    | { kind: 'system'; galaxy: import('./mandelbrot').GalaxySpec; star: { seed: number; mass: number; index?: number } | 'sun' }
     | { kind: 'blackhole'; galaxy: import('./mandelbrot').GalaxySpec }
     | { kind: 'planet'; galaxy: import('./mandelbrot').GalaxySpec; visit: import('./levels/planet').PlanetVisit }
-) & { resume?: CameraState };
+) & {
+    resume?: CameraState;
+    /** The place one level down that the pilot came up from: a map marks it «вы здесь». */
+    from?: LevelRequest;
+};
 
 export interface Action {
     label: string;

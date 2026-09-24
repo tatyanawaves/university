@@ -6,9 +6,9 @@ import type { Action } from '../common';
 import { virtualKeys } from '../flight';
 import { UNIT_KM } from '../physics';
 import { Combat, CombatOptions } from './combat';
-import { effects, progress } from './progress';
+import { progress } from './progress';
 import { kill, mission, Mission, MissionLog, objectiveText, reach } from './missions';
-import { Creatures, CreatureSpec, DialogBox, TALK_KM } from './creatures';
+import { Creatures, CreatureSpec, DialogBox } from './creatures';
 import type { QuestOffer, WorldBrief } from './dialogue';
 import { makeShip } from './models';
 
@@ -326,14 +326,20 @@ export class ShipGame {
     }
 
     /** Speed cap while enemies are close, km/s → scene units/s. */
+    /**
+     * Speed cap in a dogfight (km/s → scene units/s), so a fight is a fight rather than a blur.
+     * Holding the afterburner lifts it: the pilot can always break away, and enemies left far
+     * enough behind give up. (There is no cap near creatures: the autopilot brakes for those.)
+     */
     speedLimit(pilotPos: THREE.Vector3, boosted: boolean): number {
+        if (boosted) return Infinity;
         const local = this.combat.toLocal(pilotPos);
-        let limit = this.combat.engaged(local) ? (boosted ? 4 * effects.boost : 4) * this.KM : Infinity;
-        // Easing in towards a creature, the way the ship slows near a surface, so it is not overshot.
-        const km = this.creatures?.nearestKm(pilotPos) ?? Infinity;
-        if (km < 50_000) limit = Math.min(limit, Math.max(1, (km - TALK_KM * 0.3) * 0.7) * this.KM * (boosted ? 5 : 1));
-        return limit;
+        if (!this.combat.engaged(local)) return Infinity;
+        if (!this.cappedToast) { this.cappedToast = true; this.toast('Враги рядом — скорость боя. Shift (форсаж) — оторваться'); }
+        return 4 * this.KM;
     }
+
+    private cappedToast = false;
 
     actions(): Action[] {
         const active = this.log.active?.state === 'active';

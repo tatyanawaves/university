@@ -115,8 +115,8 @@ function crumbName(r: LevelRequest): string {
 
 function create(r: LevelRequest): Level {
     switch (r.kind) {
-        case 'web': return new CosmicWebLevel(host);
-        case 'galaxy': return new GalaxyLevel(host, r.galaxy);
+        case 'web': return new CosmicWebLevel(host, r.from);
+        case 'galaxy': return new GalaxyLevel(host, r.galaxy, r.from);
         case 'system': return new StarSystemLevel(host, r.galaxy, r.star);
         case 'blackhole': return new BlackHoleLevel(host, r.galaxy);
         case 'planet': return new PlanetLevel(host, r.visit);
@@ -134,6 +134,11 @@ async function navigate(next: LevelRequest[]) {
     await nextFrame();
     level?.dispose();
     level = null;
+    // Going up the path: the map one level up marks where the pilot was.
+    if (next.length < path.length && next[next.length - 1] === path[next.length - 1]) {
+        const child = path[next.length];
+        next[next.length - 1].from = { ...child, resume: undefined, from: undefined };
+    }
     path = next;
     try {
         const req = path[path.length - 1];
