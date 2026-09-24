@@ -7,13 +7,16 @@ import { virtualKeys } from '../flight';
 import { UNIT_KM } from '../physics';
 import { Combat, CombatOptions } from './combat';
 import { progress } from './progress';
-import { kill, mission, Mission, MissionLog, objectiveText, reach } from './missions';
-import { Creatures, CreatureSpec, DialogBox } from './creatures';
+import { collect, isGround, kill, mission, Mission, MissionLog, objectiveText, reach } from './missions';
+import { Creatures, CreatureSpec, DialogBox, Speaker } from './creatures';
 import type { QuestOffer, WorldBrief } from './dialogue';
 import { makeShip } from './models';
 
 /** Mission progress per place (a system, or a planet's surface) survives leaving and coming back, and reloads. */
 const logs = new Map<string, MissionLog>();
+
+/** Errands handed out for a place whose log has not been opened yet. */
+const pending = new Map<string, Mission[]>();
 
 function openLog(key: string, missions: () => Mission[]): MissionLog {
     let log = logs.get(key);
@@ -26,7 +29,30 @@ function openLog(key: string, missions: () => Mission[]): MissionLog {
         if (log.active) log.active.spawned = false;
     }
     logs.set(key, log);
+    for (const m of pending.get(key) ?? []) log.addSide(m, 0);
+    pending.delete(key);
     return log;
+}
+
+/**
+ * File an errand with the place where it is to be done: a job in space goes to the star system's
+ * log (it is tracked while flying there), a job on foot to the surface's.
+ */
+export function addErrandTo(key: string, m: Mission, now: number) {
+    if (logs.has(key) || progress.data.logs[key]) openLog(key, () => []).addSide(m, now);
+    else pending.set(key, [...(pending.get(key) ?? []), m]);
+}
+
+/** The mission for an errand someone offered. Its id ties it to the giver (side-<id>), for their memory. */
+export function errandMission(q: QuestOffer, giver: { id: string; name: string }): Mission {
+    const id = `side-${giver.id}`;
+    const m = q.type === 'kill'
+        ? mission(id, q.title, q.brief, q.body, isGround(q.enemy!) ? [] : [{ kind: q.enemy as import('./models').EnemyKind, count: q.count! }], [kill(q.enemy!, q.count!)], q.reward)
+        : q.type === 'collect'
+            ? mission(id, q.title, q.brief, q.body, [], [collect(q.item!, q.body, q.count!)], q.reward)
+            : mission(id, q.title, q.brief, q.body, [], [reach(q.body, 30_000)], q.reward);
+    m.giver = giver.name;
+    return m;
 }
 
 /** Copy every mission log into the save (called before saving). */
@@ -152,11 +178,7 @@ export class ShipGame {
         }
         this.log = openLog(key, missions);
         this.combat.onKill = kind => this.log.kill(kind);
-        this.combat.onPlayerHit = () => {
-            this.hud.flash.classList.remove('on');
-            void this.hud.flash.offsetWidth;
-            this.hud.flash.classList.add('on');
-        };
+        this.combat.onPlayerHit = () => this.flashHit();
         this.combat.onPlayerDeath = () => {
             this.deadFor = 0;
             this.toast('Корабль уничтожен! Восстановление через 3 с');
@@ -208,6 +230,28 @@ export class ShipGame {
         window.addEventListener('mousedown', this.onMouseDown);
         window.addEventListener('mouseup', this.onMouseUp);
         canvas.addEventListener('pointermove', this.onPointer);
+    }
+
+    /**
+     * The ship has landed and the pilot is out on foot: no flying, shooting or chance meetings in the
+     * air (whatever was chasing the ship loses it), but the HUD and the mission log stay up.
+     */
+    get parked(): boolean { return this.isParked; }
+    park(on: boolean) {
+        this.isParked = on;
+        this.ship.visible = !on && this.view === 'third';
+        if (on) this.combat.clear();
+    }
+    private isParked = false;
+
+    /** The sunlight and skylight the ship's meshes are lit by (a planet sets them from its sky). */
+    get lights(): { sun: THREE.DirectionalLight; fill: THREE.HemisphereLight } { return { sun: this.sun, fill: this.fill }; }
+
+    /** A red flash at the screen edges: the pilot (or the robot) was hit. */
+    flashHit() {
+        this.hud.flash.classList.remove('on');
+        void this.hud.flash.offsetWidth;
+        this.hud.flash.classList.add('on');
     }
 
     toggleView() {
@@ -306,11 +350,8 @@ export class ShipGame {
         this.dialog.start(spec, this.world, m?.state === 'active' ? 'active' : 'none', progress.memory(spec.id));
     }
 
-    private takeErrand(q: QuestOffer, spec: CreatureSpec) {
-        const m = q.type === 'kill'
-            ? mission(`side-${spec.id}`, q.title, q.brief, q.body, [{ kind: q.enemy!, count: q.count! }], [kill(q.enemy!, q.count!)], q.reward)
-            : mission(`side-${spec.id}`, q.title, q.brief, q.body, [], [reach(q.body, 30_000)], q.reward);
-        m.giver = spec.name;
+    private takeErrand(q: QuestOffer, spec: Speaker) {
+        const m = errandMission(q, spec);
         this.log.addSide(m, this.lastNow);
         progress.memory(spec.id).errands.push({ title: m.title, state: 'active' });
         progress.save();
@@ -322,7 +363,7 @@ export class ShipGame {
     get objectiveBody(): string | null {
         const o = this.log.current();
         if (!o) return null;
-        return o.type === 'kill' ? this.log.active!.location : o.body;
+        return o.type === 'kill' ? this.log.active!.location : o.type === 'collect' ? o.where : o.body;
     }
 
     /** Speed cap while enemies are close, km/s → scene units/s. */
@@ -356,6 +397,13 @@ export class ShipGame {
         this.lastNow = f.now;
         this.lastPilot = f.pilot;
         this.time += dt;
+        if (this.isParked) {
+            this.ship.visible = false;
+            this.hud.cross.hidden = true;
+            this.hudClock -= dt;
+            if (this.hudClock <= 0) { this.hudClock = 0.1; this.renderHud(f.now); }
+            return;
+        }
         const locked = document.pointerLockElement === this.canvas;
         const firing = !this.talking && (this.keys.has('Space') || virtualKeys.has('Space') || this.mouseFiring);
         if (firing && !f.free) this.wantsFree = true;
@@ -508,7 +556,7 @@ export class ShipGame {
             line.textContent = objectiveText(o, now, m.startedAt);
             t.appendChild(line);
         }
-        if (this.lastPilot) {
+        if (this.lastPilot && !this.isParked) {
             const b = this.bodyByName(this.objectiveBody ?? '');
             if (b) {
                 const d = (this.lastPilot.position.distanceTo(b.pos) - b.radius) / this.KM;

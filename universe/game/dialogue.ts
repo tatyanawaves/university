@@ -7,12 +7,16 @@
 import { secureStorage } from '../storage';
 import type { EnemyKind } from './models';
 import type { CreatureMemory } from './progress';
+import { isGround, type FoeKind, type GroundKind } from './missions';
 
 export interface QuestOffer {
     title: string;
     brief: string;
-    type: 'kill' | 'reach';
-    enemy?: EnemyKind;
+    /** Destroy enemies (in space, or on foot on a surface), fly to a body, or gather things on a surface. */
+    type: 'kill' | 'reach' | 'collect';
+    enemy?: FoeKind;
+    /** For 'collect': what to pick up. */
+    item?: string;
     count?: number;
     body: string;
     reward: number;
@@ -44,6 +48,14 @@ export interface WorldBrief {
     system: string;
     /** Bodies an errand may point at. */
     bodies: string[];
+    /** Set when the talk happens on a planet's surface, with the pilot's robot. */
+    surface?: {
+        body: string;
+        /** Enemies that roam this surface. */
+        foes: GroundKind[];
+        /** What can be gathered here, in the genitive plural («образцов серы»). */
+        item: string;
+    };
 }
 
 export interface Exchange {
@@ -65,25 +77,38 @@ export const DECLINE = 'Не сейчас, может быть позже.';
 // Validation: whatever the model says, the game only gets an errand it can run.
 // ---------------------------------------------------------------------------
 
+/** Most of one kind of enemy an errand may ask for. */
+const MAX_COUNT: Record<FoeKind, number> = {
+    drone: 12, fighter: 12, crystal: 12, interceptor: 12, gunship: 2, hive: 1, leviathan: 1,
+    skitter: 10, sentinel: 4, wraith: 5, brute: 2,
+};
+
 export function sanitizeQuest(q: unknown, world: WorldBrief, mind: CreatureMind): QuestOffer | null {
     if (!q || typeof q !== 'object') return null;
     const o = q as Record<string, unknown>;
-    const type = o.type === 'reach' ? 'reach' : o.type === 'kill' ? 'kill' : null;
+    const surface = world.surface;
+    const type = o.type === 'reach' ? 'reach' : o.type === 'kill' ? 'kill' : o.type === 'collect' && surface ? 'collect' : null;
     if (!type) return null;
     const bodyName = typeof o.body === 'string' ? o.body.trim() : '';
-    const body = world.bodies.find(b => b.toLowerCase() === bodyName.toLowerCase()) ?? mind.home;
+    let body = world.bodies.find(b => b.toLowerCase() === bodyName.toLowerCase()) ?? mind.home;
     const clamp = (x: unknown, lo: number, hi: number, dflt: number) => {
         const n = Math.round(Number(x));
         return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
     };
     const text = (x: unknown, dflt: string, max: number) => (typeof x === 'string' && x.trim() ? x.trim().slice(0, max) : dflt);
-    const enemy = ENEMIES.includes(o.enemy as EnemyKind) ? (o.enemy as EnemyKind) : 'drone';
+    const known = (k: unknown): k is FoeKind => typeof k === 'string' && (ENEMIES.includes(k as EnemyKind) || (!!surface && surface.foes.includes(k as GroundKind)));
+    const enemy: FoeKind = known(o.enemy) ? o.enemy : surface?.foes[0] ?? 'drone';
+    // Enemies on foot live on this surface; the things to gather lie here too.
+    if ((type === 'kill' && isGround(enemy)) || type === 'collect') body = surface!.body;
+    const max = type === 'collect' ? 8 : MAX_COUNT[enemy];
+    const count = type === 'reach' ? undefined : type === 'collect' ? clamp(o.count, 2, 8, 4) : clamp(o.count, 1, max, Math.min(4, max));
+    const brief = type === 'kill' ? `Помочь у тела ${body}.` : type === 'collect' ? `Собрать ${surface!.item} здесь, на поверхности.` : `Долететь до ${body}.`;
     return {
-        type, body,
+        type, body, count,
         enemy: type === 'kill' ? enemy : undefined,
-        count: type === 'kill' ? clamp(o.count, 1, enemy === 'leviathan' || enemy === 'hive' ? 1 : enemy === 'gunship' ? 2 : 12, enemy === 'leviathan' || enemy === 'hive' ? 1 : 4) : undefined,
+        item: type === 'collect' ? surface!.item : undefined,
         title: text(o.title, `Поручение: ${mind.name}`, 60),
-        brief: text(o.brief, type === 'kill' ? `Помочь у тела ${body}.` : `Долететь до ${body}.`, 240),
+        brief: text(o.brief, brief, 240),
         reward: clamp(o.reward, 100, 1500, 400),
     };
 }
@@ -163,26 +188,55 @@ function memoryPrompt(mem?: CreatureMemory): string[] {
 }
 
 function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean, mem?: CreatureMemory): string {
+    const surface = world.surface;
+    const where = surface
+        ? [
+            `Ты — ${mind.name}, ${mind.species}. Ты живёшь на поверхности тела «${surface.body}» в системе «${world.system}».`,
+            'К тебе подошёл робот, которым управляет пилот-человек: его корабль сел неподалёку.',
+        ]
+        : [
+            `Ты — ${mind.name}, ${mind.species}, живое существо в космической игре.`,
+            `Ты обитаешь возле тела «${mind.home}» в системе «${world.system}». К тебе на маленьком корабле подлетел пилот-человек.`,
+        ];
+    const kinds = surface
+        ? [
+            'Поручение бывает таких типов:',
+            `— "kill" здесь, на поверхности: уничтожить наземных врагов. enemy: ${surface.foes.map(f => `"${f}" (${GROUND_RU[f]})`).join(', ')}.`,
+            `— "collect": собрать ${surface.item} здесь, на поверхности; count — 2–8.`,
+            '— "kill" в космосе: enemy: "drone", "fighter", "crystal", "interceptor", "gunship" (1–2), "hive" (1), "leviathan" (1); body — у какого тела.',
+            '— "reach": долететь до другого тела системы и осмотреть его.',
+            `body — одно из: ${world.bodies.join(', ')} (для работы на поверхности — «${surface.body}»).`,
+        ]
+        : [
+            'Поручение бывает двух типов:',
+            '— "kill": уничтожить врагов. enemy: "drone" (дроны-разведчики), "fighter" (пиратские штурмовики), "crystal" (кристаллиды-тараны), "interceptor" (быстрые перехватчики), "gunship" (тяжёлые канонерки, 1–2), "hive" (улей, рождающий дронов, только 1), "leviathan" (космический левиафан, только 1).',
+            '— "reach": долететь до тела и осмотреть его.',
+            `body — одно из: ${world.bodies.join(', ')}.`,
+        ];
     return [
         ...memoryPrompt(mem),
-        `Ты — ${mind.name}, ${mind.species}, живое существо в космической игре.`,
+        ...where,
         `Характер: ${mind.persona}`,
-        `Ты обитаешь возле тела «${mind.home}» в системе «${world.system}». К тебе на маленьком корабле подлетел пилот-человек.`,
         'Говори по-русски, от первого лица, в своём характере, живо и образно: 2–4 предложения.',
         'Ты очень разговорчив(а): рассказываешь о себе и своей жизни, делишься слухами о системе и других существах,',
         'задаёшь пилоту вопросы о нём самом, шутишь или грустишь — как подсказывает характер. Реагируй на тон и слова пилота.',
         `Ты сама(сам) начинаешь разговор и постепенно ведёшь его к тому, чтобы дать пилоту поручение — не раньше ${MIN_REPLIES}-го ответа пилота.`,
         forceQuest ? 'СЕЙЧАС обязательно дай поручение.' : '',
-        'Поручение бывает двух типов:',
-        '— "kill": уничтожить врагов. enemy: "drone" (дроны-разведчики), "fighter" (пиратские штурмовики), "crystal" (кристаллиды-тараны), "interceptor" (быстрые перехватчики), "gunship" (тяжёлые канонерки, 1–2), "hive" (улей, рождающий дронов, только 1), "leviathan" (космический левиафан, только 1).',
-        '— "reach": долететь до тела и осмотреть его.',
-        `body — одно из: ${world.bodies.join(', ')}.`,
+        ...kinds,
         'Отвечай ТОЛЬКО объектом JSON, без markdown и пояснений:',
         '{"line": "твоя реплика", "options": ["ответ 1", "ответ 2", "ответ 3", "ответ 4"], "quest": null}',
         'options — четыре коротких (до 12 слов) разных по тону ответа пилота: дружелюбный, деловой, дерзкий, любопытный.',
-        'Когда даёшь поручение, вместо null укажи: "quest": {"title": "…", "brief": "что и зачем сделать", "type": "kill" или "reach", "enemy": "…", "count": число 1–12, "body": "…", "reward": число 100–1500}',
+        `Когда даёшь поручение, вместо null укажи: "quest": {"title": "…", "brief": "что и зачем сделать", "type": ${surface ? '"kill", "collect" или "reach"' : '"kill" или "reach"'}, "enemy": "…", "count": число, "body": "…", "reward": число 100–1500}`,
     ].join('\n');
 }
+
+/** Enemies on foot, for the model. */
+const GROUND_RU: Record<GroundKind, string> = {
+    skitter: 'скиттеры — быстрые кусачие многоножки-машины',
+    sentinel: 'шагоходы-стражи с пушками, 1–4',
+    wraith: 'призрачные охотники, парящие и стреляющие',
+    brute: 'громилы — тяжёлые бронированные твари, 1–2',
+};
 
 async function callModel(a: ModelAccess, system: string, history: { role: 'user' | 'assistant'; content: string }[], signal: AbortSignal): Promise<string> {
     if (a.provider === 'gemini') {
@@ -336,7 +390,8 @@ export class Conversation {
         const replies = this.history.length;
         let turn: DialogueTurn | null = null;
         if (!this.offline && this.access) {
-            const msgs: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: '(Пилот подлетает к тебе и ждёт. Начни разговор.)' }];
+            const opening = this.world.surface ? '(Робот пилота подходит к тебе и ждёт. Начни разговор.)' : '(Пилот подлетает к тебе и ждёт. Начни разговор.)';
+            const msgs: { role: 'user' | 'assistant'; content: string }[] = [{ role: 'user', content: opening }];
             for (const h of this.history) {
                 msgs.push({ role: 'assistant', content: JSON.stringify(h.turn) });
                 if (h.reply) msgs.push({ role: 'user', content: h.reply });

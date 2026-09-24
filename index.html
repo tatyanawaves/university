@@ -167,6 +167,19 @@
     .earrow { position: absolute; left: 0; top: 0; margin: -12px 0 0 -12px; width: 24px; height: 24px; line-height: 24px;
       text-align: center; font-size: 20px; color: #ff5566; text-shadow: 0 0 6px #000; pointer-events: none; will-change: transform; }
     body.hud-off .shiphud { display: none; }
+    /* On foot: what E or F would do, the crosshair, the jet pack's fuel. */
+    #surfhud .prompt { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 4; pointer-events: none;
+      padding: 6px 14px; border-radius: 16px; background: rgba(8, 12, 20, 0.72); border: 1px solid rgba(160, 220, 255, 0.35);
+      font-size: 13px; color: #e8f4ff; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+    #surfhud .cross { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px; pointer-events: none; z-index: 4; }
+    #surfhud .cross::before, #surfhud .cross::after { content: ''; position: absolute; background: rgba(200, 240, 255, 0.85); }
+    #surfhud .cross::before { left: 10px; top: 0; width: 2px; height: 22px; }
+    #surfhud .cross::after { top: 10px; left: 0; height: 2px; width: 22px; }
+    #surfhud .cross i { position: absolute; left: 7px; top: 7px; width: 8px; height: 8px; border-radius: 50%; background: rgba(8, 12, 20, 0.9); }
+    #surfhud .fuel { position: fixed; left: 50%; bottom: 114px; transform: translateX(-50%); padding: 4px 10px; display: flex; gap: 8px; align-items: center; font-size: 11px; z-index: 3; }
+    #surfhud .fuel .bar { display: block; width: 90px; height: 5px; background: rgba(255,255,255,0.12); border-radius: 3px; overflow: hidden; }
+    #surfhud .fuel .bar b { display: block; height: 100%; background: linear-gradient(90deg, #ff9a3c, #ffe066); }
+    body.hud-off #surfhud { display: none; }
     @media (max-width: 760px) { #tracker { top: auto; bottom: 150px; } #shipbars { bottom: 30px; } }
 
     @media (pointer: coarse) { #pad { display: grid; } #pad-side { display: flex; } #panel { bottom: auto; } }
