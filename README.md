@@ -32,7 +32,14 @@ npm run typecheck
 npm run build      # статическая сборка в dist/
 ```
 
-## Деплой на Vercel
+## Публикация
+
+**GitHub Pages** (бесплатно, открыто всем): при каждом пуше в `main` workflow
+`.github/workflows/pages.yml` собирает сайт и публикует его на
+https://tatyanawaves.github.io/university/. Один раз нужно включить Pages:
+Settings → Pages → Source: **GitHub Actions**.
+
+### Vercel
 
 Импортируйте репозиторий в Vercel (Add New → Project → `tatyanawaves/university`)
 и назовите проект `university`. Vercel сам определит Vite: команда сборки
