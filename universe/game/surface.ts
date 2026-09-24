@@ -440,8 +440,11 @@ export class SurfaceGame {
         this.ctx.toast('Посадка. Открываем трап…');
     }
 
+    private walkSince = 0;
+
     private startWalking() {
         this.mode = 'walk';
+        this.walkSince = this.time;
         this.camBlend = 0;
         this.robotYaw = this.shipYaw + Math.PI;
         this.camYaw = this.shipYaw + Math.PI;
@@ -1339,7 +1342,7 @@ export class SurfaceGame {
             const b = this.nearestBeing();
             if (b) prompt = `E — поговорить: ${b.spec.emoji} ${b.spec.name} · ${b.spec.species.split(',')[0]}`;
             else if (this.robotPos.distanceTo(this.rampEnd()) < BOARD_M) prompt = 'F — подняться на борт и взлететь';
-            else if (document.pointerLockElement !== this.ctx.canvas) prompt = 'Клик по сцене — захватить мышь для обзора и стрельбы';
+            else if (document.pointerLockElement !== this.ctx.canvas && this.time - this.walkSince < 12) prompt = 'Клик по сцене — захватить мышь для обзора и стрельбы';
         } else if (this.mode === 'dead') prompt = 'Робот разрушен — ремонтный отсек восстанавливает его…';
         if (this.hud.prompt.textContent !== prompt) this.hud.prompt.textContent = prompt;
         this.hud.prompt.hidden = !prompt;
