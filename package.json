@@ -1,0 +1,26 @@
+{
+  "name": "university",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A procedural universe in the browser: Mandelbrot mathematics, real orbital physics, free flight, combat and creatures you can talk to.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "crypto-js": "^4.2.0",
+    "three": "^0.182.0"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "@types/node": "^22.14.0",
+    "@types/three": "^0.182.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^5.0.0"
+  }
+}

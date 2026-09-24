@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>University — процедурная вселенная</title>
+  <meta name="description" content="Процедурная вселенная на three.js: космическая паутина из Мандельбульба, галактики, звёздные системы и чёрная дыра с квантовым ядром.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #000;
+      --panel: rgba(8, 12, 22, 0.72);
+      --border: rgba(140, 170, 255, 0.18);
+      --text: #dbe4ff;
+      --muted: #8a97b8;
+      --accent: #7cc4ff;
+      --accent-2: #ffb86b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+      font: 13px/1.45 'IBM Plex Sans', system-ui, sans-serif; }
+    canvas#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+    #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+    .ulabel { position: absolute; left: 0; top: 0; white-space: nowrap; font-size: 12px; color: #cfe0ff;
+      margin: -8px 0 0 10px; text-shadow: 0 0 4px #000, 0 0 2px #000; will-change: transform; }
+    .ulabel.clickable { pointer-events: auto; cursor: pointer; }
+    .ulabel.clickable:hover { color: #fff; text-decoration: underline; }
+    .ulabel.moon { font-size: 11px; color: var(--muted); }
+    .ulabel.star { color: #ffe3a8; }
+    .ulabel.comet { color: #a8e6ff; font-style: italic; }
+    .ulabel.portal { color: #e8c8ff; font-weight: 600; text-shadow: 0 0 6px rgba(190, 120, 255, .8); }
+    .ulabel.sat { font-size: 10px; color: #b8c8dc; }
+    .ulabel.home { color: var(--accent); font-weight: 600; }
+    .ulabel.bh { color: var(--accent-2); font-weight: 600; }
+    .ulabel.sel { color: #fff; font-weight: 600; }
+    .ulabel.target { color: #fff; font-weight: 600; }
+    .ulabel.target::before { content: '◎ '; color: var(--accent); }
+
+    .hud { position: fixed; z-index: 2; }
+    .glass { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; backdrop-filter: blur(8px); }
+    #top { top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+    #top > * { pointer-events: auto; }
+    #crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+    #crumbs span { color: var(--muted); }
+    #title { font-size: 20px; font-weight: 600; letter-spacing: 0.02em; text-shadow: 0 0 12px rgba(0,0,0,.8); }
+    button { font: inherit; color: var(--text); background: rgba(20, 30, 55, 0.7); border: 1px solid var(--border);
+      border-radius: 7px; padding: 5px 10px; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: 1; cursor: default; background: transparent; border-color: transparent; color: #fff; font-weight: 600; }
+    button.active { background: rgba(60, 120, 220, 0.45); border-color: var(--accent); }
+    /* Never let the buttons run under the physics panel on the right. */
+    #actions { display: flex; flex-wrap: wrap; gap: 5px; max-width: min(720px, calc(100% - 360px)); }
+
+    #panel { top: 12px; right: 12px; width: 330px; max-height: calc(100% - 90px); display: flex; flex-direction: column; }
+    #panel header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    #panel header b { font-weight: 600; }
+    #info { padding: 8px 12px 12px; overflow-y: auto; }
+    #panel.collapsed #info { display: none; }
+    #info h3 { margin: 12px 0 4px; font-size: 13px; color: var(--accent); }
+    #info p { margin: 8px 0; color: var(--muted); font-size: 12px; }
+    #info .row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; border-bottom: 1px dashed rgba(140,170,255,0.08); }
+    #info .row span { color: var(--muted); }
+    #info .row b { font: 500 12px 'JetBrains Mono', monospace; text-align: right; }
+
+    #targets { left: 12px; top: 50%; transform: translateY(-40%); display: flex; flex-direction: column; gap: 2px;
+      max-height: 45vh; overflow-y: auto; padding: 6px; }
+    #targets button { text-align: left; background: transparent; border-color: transparent; padding: 3px 8px; white-space: pre; }
+    #targets button:hover { background: rgba(40, 60, 110, 0.6); }
+
+    #status { left: 50%; bottom: 40px; transform: translateX(-50%); padding: 6px 14px; font: 12px 'JetBrains Mono', monospace;
+      white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
+    #status:empty { display: none; }
+    #help { left: 12px; right: 12px; bottom: 10px; text-align: center; color: var(--muted); font-size: 11px; }
+    #toast { left: 50%; top: 18%; transform: translate(-50%, -10px); padding: 8px 16px; opacity: 0; transition: .3s; pointer-events: none; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+    #fade { position: fixed; inset: 0; z-index: 5; background: #000; display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font: 14px 'JetBrains Mono', monospace; opacity: 0; pointer-events: none; transition: opacity .35s; }
+    #fade.on { opacity: 1; pointer-events: auto; }
+    body.hud-off .hud, body.hud-off #labels { display: none; }
+    #pad { left: 12px; bottom: 60px; display: none; grid-template-columns: repeat(3, 52px); grid-auto-rows: 52px; gap: 6px; }
+    #pad button { font-size: 20px; padding: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
+    #pad button.held { background: rgba(60, 120, 220, 0.6); }
+    #pad-side { right: 12px; bottom: 60px; display: none; flex-direction: column; gap: 6px; }
+    #pad-side button { width: 64px; height: 52px; font-size: 14px; touch-action: none; }
+    .ulabel.mission { color: #ffd166; font-weight: 600; }
+    .ulabel.mission::after { content: ' ◇ цель'; color: #ffd166; }
+    .elabel { position: absolute; left: 0; top: 0; margin: -34px 0 0 -60px; width: 120px; text-align: center; font-size: 11px;
+      color: #ffb3b3; text-shadow: 0 0 3px #000; will-change: transform; }
+    .elabel i { display: block; height: 4px; margin-top: 2px; background: rgba(255,255,255,0.15); border-radius: 2px; overflow: hidden; }
+    .elabel b { display: block; height: 100%; background: #ff5566; }
+    #shipbars { left: 50%; bottom: 76px; transform: translateX(-50%); padding: 6px 12px; display: flex; gap: 14px; align-items: center; font-size: 12px; }
+    #shipbars > div { display: flex; align-items: center; gap: 6px; }
+    #shipbars .bar { display: block; width: 110px; height: 7px; background: rgba(255,255,255,0.12); border-radius: 4px; overflow: hidden; }
+    #shipbars .bar b { display: block; height: 100%; transition: width .15s; }
+    #shipbars .hull b { background: linear-gradient(90deg, #ff6b4a, #ffd166); }
+    #shipbars .shield b { background: linear-gradient(90deg, #3a8bff, #7cf3ff); }
+    #shipbars .score b { font: 600 12px 'JetBrains Mono', monospace; color: #ffd166; }
+    #dialog { position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%); width: min(620px, calc(100% - 24px)); max-height: min(70vh, 560px);
+      display: flex; flex-direction: column; z-index: 6; padding: 0; overflow: hidden; }
+    #dialog[hidden] { display: none; }
+    #dialog header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    #dialog header .emoji { font-size: 28px; }
+    #dialog header div { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    #dialog header b { color: #9ff0d8; font-size: 15px; }
+    #dialog header small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #dialog .lines { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.4; }
+    #dialog .lines p { margin: 0; max-width: 88%; padding: 7px 10px; border-radius: 10px; animation: dlgIn .25s ease-out; }
+    #dialog .lines p.them { background: rgba(80, 200, 170, .12); border: 1px solid rgba(120, 230, 200, .25); align-self: flex-start; }
+    #dialog .lines p.me { background: rgba(80, 130, 230, .18); border: 1px solid rgba(124, 196, 255, .3); align-self: flex-end; color: #dfe9ff; }
+    #dialog .lines p.typing { color: var(--muted); letter-spacing: 3px; animation: dlgPulse 1s infinite; }
+    #dialog .quest { border: 1px solid #ffd166; border-radius: 10px; padding: 8px 10px; background: rgba(255, 209, 102, .08); }
+    #dialog .quest b { color: #ffd166; } #dialog .quest p { margin: 4px 0; font-size: 13px; } #dialog .quest small { color: var(--muted); }
+    #dialog .opts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); }
+    #dialog .opts button { text-align: left; display: flex; gap: 8px; align-items: flex-start; white-space: normal; line-height: 1.3; }
+    #dialog .opts kbd { color: #ffd166; font: 12px 'JetBrains Mono', monospace; }
+    #dialog footer { padding: 0 12px 8px; color: var(--muted); font-size: 11px; }
+    #dialog footer button.link { background: none; border: none; color: var(--accent); padding: 0; font-size: 11px; cursor: pointer; }
+    #dialog .aikey { display: flex; gap: 6px; margin: 4px 0; flex-wrap: wrap; }
+    #dialog .aikey input { flex: 1; min-width: 160px; }
+    #dialog .aikey input, #dialog .aikey select { background: rgba(0,0,0,.35); color: #dfe9ff; border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; }
+    @media (max-width: 560px) { #dialog .opts { grid-template-columns: 1fr; } #dialog { bottom: 8px; } }
+    @keyframes dlgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @keyframes dlgPulse { 50% { opacity: .4; } }
+    #tracker { left: 12px; bottom: 70px; max-width: 300px; padding: 8px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+    #tracker b { color: #ffd166; }
+    #tracker small { color: var(--muted); }
+    #missions { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(520px, calc(100% - 24px)); max-height: 70vh; overflow-y: auto; padding: 0 0 8px; z-index: 4; }
+    #missions header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(8,12,22,0.95); }
+    #missions .mission { padding: 10px 14px; border-bottom: 1px dashed rgba(140,170,255,0.12); display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+    #missions .mission p { margin: 0; color: var(--muted); grid-column: 1; font-size: 12px; }
+    #missions .mission small { color: var(--muted); grid-column: 1; }
+    #missions .mission button { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+    #missions .mission.done b { color: #7ee787; }
+    #missions .mission.active b { color: #ffd166; }
+    #missions .mission.locked { opacity: 0.45; }
+    #missions .mission button:disabled { background: transparent; border-color: transparent; }
+    #hitflash { position: fixed; inset: 0; pointer-events: none; z-index: 3; box-shadow: inset 0 0 120px rgba(255, 40, 40, 0.0); }
+    #hitflash.on { animation: hit .35s ease-out; }
+    @keyframes hit { from { box-shadow: inset 0 0 160px rgba(255, 40, 40, 0.65); } to { box-shadow: inset 0 0 120px rgba(255, 40, 40, 0); } }
+    canvas#scene { cursor: crosshair; }
+    #crosshair { left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; pointer-events: none;
+      border: 1.5px solid rgba(160, 230, 255, 0.75); border-radius: 50%; }
+    #crosshair i { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: #aef; }
+    #crosshair.hit { animation: hitmark .25s ease-out; }
+    @keyframes hitmark { from { border-color: #ffdd55; transform: scale(1.35); } to { transform: scale(1); } }
+    .earrow { position: absolute; left: 0; top: 0; margin: -12px 0 0 -12px; width: 24px; height: 24px; line-height: 24px;
+      text-align: center; font-size: 20px; color: #ff5566; text-shadow: 0 0 6px #000; pointer-events: none; will-change: transform; }
+    body.hud-off .shiphud { display: none; }
+    @media (max-width: 760px) { #tracker { top: auto; bottom: 150px; } #shipbars { bottom: 30px; } }
+
+    @media (pointer: coarse) { #pad { display: grid; } #pad-side { display: flex; } #panel { bottom: auto; } }
+
+    @media (max-width: 760px) {
+      #panel { top: auto; bottom: 64px; left: 8px; right: 8px; width: auto; max-height: 40vh; }
+      #actions { max-width: 100%; }
+      #panel.collapsed { max-height: none; }
+      #targets { display: none !important; }
+      #status { bottom: 8px; font-size: 10px; }
+      #help { display: none; }
+      #top { left: 8px; right: 8px; top: 8px; }
+      #title { font-size: 16px; }
+      button { padding: 4px 8px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="labels"></div>
+
+  <div id="top" class="hud">
+    <nav id="crumbs"></nav>
+    <div id="title"></div>
+    <div id="actions"></div>
+  </div>
+
+  <aside id="panel" class="hud glass collapsed-on-mobile">
+    <header><b>Физика</b><button id="toggle-panel" title="Свернуть">▾</button></header>
+    <div id="info"></div>
+  </aside>
+
+  <nav id="targets" class="hud glass"></nav>
+  <div id="status" class="hud glass"></div>
+  <div id="help" class="hud"></div>
+  <div id="toast" class="hud glass"></div>
+  <div id="pad" class="hud" aria-label="Управление полётом">
+    <button data-key="KeyE" aria-label="Вверх">⤒</button><button data-key="KeyW" aria-label="Вперёд">▲</button><button data-key="KeyQ" aria-label="Вниз">⤓</button>
+    <button data-key="KeyA" aria-label="Влево">◀</button><button data-key="KeyS" aria-label="Назад">▼</button><button data-key="KeyD" aria-label="Вправо">▶</button>
+  </div>
+  <div id="pad-side" class="hud">
+    <button data-key="Space">🔥</button>
+    <button data-key="ShiftLeft">×10</button>
+  </div>
+  <div id="fade" class="on">Генерация…</div>
+
+  <script type="module" src="/universe/main.ts"></script>
+</body>
+</html>
