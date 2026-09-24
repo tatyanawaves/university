@@ -603,9 +603,18 @@ export class StarSystemLevel implements Level {
                 this.pilot.lookAt(this.pilot.position.clone().add(new THREE.Vector3(0, 1, 0).cross(out)));
                 this.target = b;
             }
+        } else if (d && d.tDays !== undefined) {
+            // A saved game: the same moment, so the worlds are where the pilot left them.
+            this.tDays = Number(d.tDays);
+            this.timeScale = Number(d.timeScale ?? this.timeScale);
+            this.updatePositions(0);
         }
         this.mode = 'orbit';
         this.goFree();
+    }
+
+    saveState(): CameraState {
+        return { position: this.pilot.position.toArray(), quaternion: this.pilot.quaternion.toArray(), data: { tDays: this.tDays, timeScale: this.timeScale } };
     }
 
     /** The body L would land on: the selected one, or the nearest solid world within 40 of its radii. */

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { ShipAvatar } from '../game/avatar';
+import type { CameraState } from '../common';
 import {
     Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, ProximityTrigger, row,
     spriteMaterial,
@@ -134,6 +136,8 @@ export class GalaxyLevel implements Level {
     readonly bloom = { strength: 0.9, radius: 0.55, threshold: 0.0 };
     readonly help = `${FLY_HELP} · подлетите к звезде — войдёте в её систему · клик — выбрать · двойной клик/Enter — сразу в систему`;
     private nav: Navigator;
+    /** The pilot's ship, flying ahead of the camera. */
+    private avatar!: ShipAvatar;
     private flySpeed = 0;
     // Close enough to a star to drop into its system, or to the centre to meet the black hole.
     private starTrigger = new ProximityTrigger(40, 0.1);
@@ -250,6 +254,10 @@ export class GalaxyLevel implements Level {
         this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
     }
 
+    saveState(): CameraState {
+        return { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() };
+    }
+
     resumed() {
         this.nav.fly.sync();
     }
@@ -355,6 +363,8 @@ export class GalaxyLevel implements Level {
             (this.marker.geometry.attributes.position as THREE.BufferAttribute).copyArray([v.x, v.y, v.z]).needsUpdate = true;
         }
         this.flySpeed = this.nav.update(dt);
+        if (!this.avatar) this.avatar = new ShipAvatar(this.scene, this.camera, 400, 0.3);
+        this.avatar.update(dt, this.nav.mode === 'free', Math.min(1, this.flySpeed / Math.max(this.nav.fly.speed, 1e-9)));
         this.checkTransitions(dt);
         this.labels.update(this.camera, this.width, this.height);
     }
@@ -405,6 +415,7 @@ export class GalaxyLevel implements Level {
 
     dispose() {
         this.nav.dispose();
+        this.avatar?.dispose();
         this.labels.dispose();
         window.removeEventListener('keydown', this.onKey);
         this.host.canvas.removeEventListener('dblclick', this.onDbl);

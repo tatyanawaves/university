@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { ShipAvatar } from '../game/avatar';
+import type { CameraState } from '../common';
 import {
     Action, disposeObject, Label, Labels, Level, LevelHost, particleMaterial, pickPoint, pixelScale, ProximityTrigger, row,
     spriteMaterial,
@@ -43,6 +45,8 @@ export class CosmicWebLevel implements Level {
     readonly bloom = { strength: 1.1, radius: 0.6, threshold: 0.0 };
     readonly help = `${FLY_HELP} · сбросьте скорость у галактики — войдёте в неё · клик — выбрать · двойной клик/Enter — войти`;
     private nav: Navigator;
+    /** The pilot's ship, flying ahead of the camera. */
+    private avatar!: ShipAvatar;
     private flySpeed = 0;
     private pos: Float32Array;
     private galaxyTrigger = new ProximityTrigger(1.5, 0.1);
@@ -113,6 +117,10 @@ export class CosmicWebLevel implements Level {
         const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.camera.quaternion).multiplyScalar(6);
         this.host.saveCamera(this.camera.position.clone().add(back), this.camera.quaternion);
         this.host.open({ kind: 'galaxy', galaxy: this.spec(i) });
+    }
+
+    saveState(): CameraState {
+        return { position: this.camera.position.toArray(), quaternion: this.camera.quaternion.toArray() };
     }
 
     resumed() {
@@ -188,6 +196,8 @@ export class CosmicWebLevel implements Level {
 
     update(dt: number) {
         this.flySpeed = this.nav.update(dt);
+        if (!this.avatar) this.avatar = new ShipAvatar(this.scene, this.camera, 4, 0.3);
+        this.avatar.update(dt, this.nav.mode === 'free', Math.min(1, this.flySpeed / Math.max(this.nav.fly.speed, 1e-9)));
         if (this.nav.mode === 'free' && this.flySpeed < 10) {
             let near = { i: -1, d: Infinity };
             if (this.galaxyTrigger.check(dt, () => (near = this.nearestGalaxy()).d)) {
@@ -208,6 +218,7 @@ export class CosmicWebLevel implements Level {
 
     dispose() {
         this.nav.dispose();
+        this.avatar?.dispose();
         this.labels.dispose();
         window.removeEventListener('keydown', this.onKey);
         this.host.canvas.removeEventListener('dblclick', this.onDbl);

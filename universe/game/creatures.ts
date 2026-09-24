@@ -4,7 +4,8 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../mandelbrot';
-import { ACCEPT, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, Provider, QuestOffer, saveModelKey, WorldBrief } from './dialogue';
+import { ACCEPT, APOLOGY, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, Provider, QuestOffer, REFUSE_MOOD, saveModelKey, WorldBrief } from './dialogue';
+import { CreatureMemory, progress } from './progress';
 
 export type Species = 'medusa' | 'whale' | 'oracle' | 'swarm' | 'scavenger' | 'manta' | 'serpent' | 'mycelium' | 'ghost' | 'nebula';
 
@@ -797,7 +798,7 @@ export class DialogBox {
 
     get open() { return !this.root.hidden; }
 
-    start(spec: CreatureSpec, world: WorldBrief, questState: 'none' | 'active' | 'done') {
+    start(spec: CreatureSpec, world: WorldBrief, questState: 'none' | 'active', memory: CreatureMemory) {
         this.talk?.cancel();
         this.creature = { spec };
         this.root.hidden = false;
@@ -809,14 +810,30 @@ export class DialogBox {
         if (questState === 'active') {
             this.talk = null;
             this.root.querySelector('header small')!.textContent = spec.species;
-            this.say(`Ты ещё не выполнил(а) моё поручение: «${spec.wish.title}». Я подожду.`, 'them');
+            const title = memory.errands.filter(e => e.state === 'active').pop()?.title ?? spec.wish.title;
+            this.say(`Ты ещё не выполнил(а) моё поручение: «${title}». Я подожду.`, 'them');
             this.options(['Скоро вернусь.'], () => this.close());
             return;
         }
-        this.talk = new Conversation(spec, world);
+        memory.talks++;
+        progress.save();
+        this.talk = new Conversation(spec, world, memory);
         this.root.querySelector('header small')!.textContent = `${spec.species} · ${describeAccess(this.talk.access)}`;
         this.renderFooter(!this.talk.access);
-        if (questState === 'done') this.say('Ты вернулся(ась)! Поручение выполнено — спасибо. У меня есть ещё кое-что…', 'them');
+        if (memory.mood <= REFUSE_MOOD) {
+            // Still hurt: no talk until the pilot says sorry.
+            this.say('Опять ты… После того, как ты со мной говорил, мне не хочется продолжать. Улетай.', 'them');
+            this.options([APOLOGY, 'Ну и ладно, улетаю.'], (text, i) => {
+                this.say(text, 'me');
+                if (i === 0) {
+                    memory.mood = REFUSE_MOOD + 1.5;
+                    progress.save();
+                    this.say('…Хорошо. Я принимаю извинения.', 'them');
+                    this.step(() => this.talk!.open());
+                } else this.options(['Закончить разговор'], () => this.close());
+            });
+            return;
+        }
         this.step(() => this.talk!.open());
     }
 
@@ -921,6 +938,7 @@ export class DialogBox {
 
     close() {
         if (!this.open) return;
+        progress.save(); // what the creature remembers of this talk
         this.talk?.cancel();
         this.talk = null;
         this.root.hidden = true;

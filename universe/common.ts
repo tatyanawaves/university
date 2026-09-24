@@ -62,6 +62,8 @@ export interface Level {
     click?(x: number, y: number): void;
     /** The camera was put back where the pilot left it; controllers should take it over. */
     resumed?(state: CameraState): void;
+    /** Where the pilot is, for the saved game (null: start this place afresh). */
+    saveState?(): CameraState | null;
     dispose(): void;
 }
 
