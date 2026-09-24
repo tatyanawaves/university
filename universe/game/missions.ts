@@ -1,8 +1,17 @@
 import { mulberry32 } from '../mandelbrot';
 import type { EnemyKind } from './models';
 
+/** Enemies met on foot, on a planet's surface. */
+export type GroundKind = 'skitter' | 'sentinel' | 'wraith' | 'brute';
+/** Anything a mission may ask to destroy: in space or on the ground. */
+export type FoeKind = EnemyKind | GroundKind;
+export const GROUND_KINDS: GroundKind[] = ['skitter', 'sentinel', 'wraith', 'brute'];
+export const isGround = (k: string): k is GroundKind => (GROUND_KINDS as string[]).includes(k);
+
 export type Objective =
-    | { type: 'kill'; enemy: EnemyKind; count: number; done: number }
+    | { type: 'kill'; enemy: FoeKind; count: number; done: number }
+    /** Pick up things lying on a surface (samples, parts), `where` — the body. */
+    | { type: 'collect'; item: string; where: string; count: number; done: number }
     | { type: 'reach'; body: string; withinKm: number; done: number }
     | { type: 'race'; body: string; seconds: number; withinKm: number; done: number };
 
@@ -25,7 +34,7 @@ export interface Mission {
     giver?: string;
 }
 
-const ENEMY_RU: Record<EnemyKind, [string, string]> = {
+export const ENEMY_RU: Record<FoeKind, [string, string]> = {
     drone: ['дрон', 'дронов'],
     fighter: ['штурмовик', 'штурмовиков'],
     crystal: ['кристаллид', 'кристаллидов'],
@@ -33,14 +42,19 @@ const ENEMY_RU: Record<EnemyKind, [string, string]> = {
     interceptor: ['перехватчик', 'перехватчиков'],
     gunship: ['канонерку', 'канонерок'],
     hive: ['улей', 'ульев'],
+    skitter: ['скиттера', 'скиттеров'],
+    sentinel: ['шагохода-стража', 'шагоходов-стражей'],
+    wraith: ['призрачного охотника', 'призрачных охотников'],
+    brute: ['громилу', 'громил'],
 };
 
 export function mission(id: string, title: string, brief: string, location: string, spawn: Mission['spawn'], objectives: Objective[], reward: number): Mission {
     return { id, title, brief, location, triggerKm: 40_000, spawn, objectives, reward, state: 'available', spawned: false, startedAt: 0 };
 }
 
-export const kill = (enemy: EnemyKind, count: number): Objective => ({ type: 'kill', enemy, count, done: 0 });
+export const kill = (enemy: FoeKind, count: number): Objective => ({ type: 'kill', enemy, count, done: 0 });
 export const reach = (body: string, withinKm: number): Objective => ({ type: 'reach', body, withinKm, done: 0 });
+export const collect = (item: string, where: string, count: number): Objective => ({ type: 'collect', item, where, count, done: 0 });
 
 export function solarMissions(): Mission[] {
     return [
@@ -86,6 +100,8 @@ export function objectiveText(o: Objective, now = 0, startedAt = 0): string {
             const [one, many] = ENEMY_RU[o.enemy];
             return `Уничтожить ${o.count === 1 ? one : many}: ${o.done}/${o.count}`;
         }
+        case 'collect':
+            return `Собрать: ${o.item} (${o.where}) ${o.done}/${o.count}`;
         case 'reach':
             return `${o.done ? '✓' : '◇'} Долететь до: ${o.body} (≤ ${o.withinKm.toLocaleString('ru-RU')} км)`;
         case 'race': {
@@ -95,7 +111,7 @@ export function objectiveText(o: Objective, now = 0, startedAt = 0): string {
     }
 }
 
-const objectiveDone = (o: Objective) => (o.type === 'kill' ? o.done >= o.count : o.done > 0);
+const objectiveDone = (o: Objective) => (o.type === 'kill' || o.type === 'collect' ? o.done >= o.count : o.done > 0);
 
 export class MissionLog {
     readonly missions: Mission[];
@@ -144,11 +160,22 @@ export class MissionLog {
         return this.active?.objectives.find(o => !objectiveDone(o)) ?? null;
     }
 
-    kill(kind: EnemyKind) {
+    kill(kind: FoeKind) {
         const m = this.active;
         if (!m || m.state !== 'active') return;
         for (const o of m.objectives) if (o.type === 'kill' && o.enemy === kind && o.done < o.count) { o.done++; break; }
         this.check();
+    }
+
+    /** Something was picked up; returns true if it counted. */
+    collect(item: string): boolean {
+        const m = this.active;
+        if (!m || m.state !== 'active') return false;
+        const o = m.objectives.find(x => x.type === 'collect' && x.item === item && x.done < x.count);
+        if (!o) return false;
+        o.done++;
+        this.check();
+        return true;
     }
 
     /** Called with the distance (km) from the ship to each body's surface that matters right now. */

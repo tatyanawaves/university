@@ -17,17 +17,29 @@ export interface TerrainParams {
     seaBias: number;
 }
 
-const fract = (x: number) => x - Math.floor(x);
-
-function hash(x: number, y: number): number {
-    let p3x = fract(x * 0.1031), p3y = fract(y * 0.1031), p3z = fract(x * 0.1031);
-    const d = p3x * (p3y + 33.33) + p3y * (p3z + 33.33) + p3z * (p3x + 33.33);
-    p3x += d; p3y += d; p3z += d;
-    return fract((p3x + p3y) * p3z);
+/** An integer mixer (Wellons' "lowbias32"): the same bits in GLSL (uint) and here (Math.imul). */
+function mix32(x: number): number {
+    x = (x ^ (x >>> 16)) >>> 0;
+    x = Math.imul(x, 0x7feb352d) >>> 0;
+    x = (x ^ (x >>> 15)) >>> 0;
+    x = Math.imul(x, 0x846ca68b) >>> 0;
+    return (x ^ (x >>> 16)) >>> 0;
 }
 
-/** Value noise in [-1, 1] and its gradient. */
-function noised(x: number, y: number, out: number[]): number[] {
+/**
+ * The GLSL thash(): a hash of the integer cell containing (x, y), in [0, 1). Integer arithmetic,
+ * so the GPU and the CPU agree exactly: a float hash (fract of big products) comes out different
+ * in float32 and float64, and near 0/1 it flips — whole hills then differ between the drawn
+ * ground and the one the robot walks on.
+ */
+export function hash(x: number, y: number): number {
+    const i = Math.floor(x) | 0, j = Math.floor(y) | 0;
+    const h = mix32((Math.imul(i, 0x9e3779b1) ^ mix32((j + 0x85ebca6b) >>> 0)) >>> 0);
+    return (h >>> 8) / 16777216;
+}
+
+/** Value noise in [-1, 1] and its gradient (the GLSL tnoised). */
+export function noised(x: number, y: number, out: number[]): number[] {
     const ix = Math.floor(x), iy = Math.floor(y);
     const wx = x - ix, wy = y - iy;
     const ux = wx * wx * wx * (wx * (wx * 6 - 15) + 10), uy = wy * wy * wy * (wy * (wy * 6 - 15) + 10);
@@ -42,8 +54,8 @@ function noised(x: number, y: number, out: number[]): number[] {
 
 const nd = [0, 0, 0];
 
-/** Plain fBm of value noise, for the continents. */
-function fbm(x: number, y: number, octaves: number): number {
+/** Plain fBm of value noise, for the continents (the GLSL tfbm). */
+export function fbm(x: number, y: number, octaves: number): number {
     let s = 0, a = 0.5;
     for (let i = 0; i < octaves; i++) {
         s += a * noised(x, y, nd)[0];
@@ -102,10 +114,15 @@ export function terrainHeight(p: TerrainParams, xM: number, zM: number, octaves 
 
 /** The same functions in GLSL. */
 export const TERRAIN_GLSL = /* glsl */ `
+uint tmix(uint x) {
+    x ^= x >> 16u; x *= 0x7feb352du;
+    x ^= x >> 15u; x *= 0x846ca68bu;
+    return x ^ (x >> 16u);
+}
 float thash(vec2 q) {
-    vec3 p3 = fract(vec3(q.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+    ivec2 c = ivec2(floor(q));
+    uint h = tmix(uint(c.x) * 0x9e3779b1u ^ tmix(uint(c.y) + 0x85ebca6bu));
+    return float(h >> 8u) / 16777216.0;
 }
 vec3 tnoised(vec2 q) {
     vec2 i = floor(q), w = q - i;

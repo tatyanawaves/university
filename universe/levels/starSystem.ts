@@ -639,6 +639,8 @@ export class StarSystemLevel implements Level {
                 name: b.name, kind: b.kind as PlanetKind | 'moon', radiusKm: b.radiusKm,
                 gravity: surfaceGravity(b.massEarth, b.radiusKm / R_EARTH_KM), dayDays: b.dayDays || 1, seed: b.name.length * 131 + Math.round(b.radiusKm),
                 systemKey: this.system ? `sys:${this.system.seed}` : 'sys:sun',
+                system: this.title,
+                bodies: this.bodies.filter(x => x.kind !== 'star').map(x => x.name),
             },
         });
     }

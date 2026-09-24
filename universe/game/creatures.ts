@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { mulberry32 } from '../mandelbrot';
 import { ACCEPT, APOLOGY, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, Provider, QuestOffer, REFUSE_MOOD, saveModelKey, WorldBrief } from './dialogue';
 import { CreatureMemory, progress } from './progress';
+import { isGround } from './missions';
 
 export type Species = 'medusa' | 'whale' | 'oracle' | 'swarm' | 'scavenger' | 'manta' | 'serpent' | 'mycelium' | 'ghost' | 'nebula';
 
@@ -19,6 +20,9 @@ export interface CreatureSpec extends CreatureMind {
     /** Where round the body it hangs, radians. */
     angle: number;
 }
+
+/** Anyone who can hold a conversation: a creature in space or a being on a surface. */
+export type Speaker = CreatureMind & { id: string; emoji: string };
 
 /** Talking range, km. */
 export const TALK_KM = 250;
@@ -765,8 +769,8 @@ export class DialogBox {
     private opts: HTMLDivElement;
     private busy = false;
     private talk: Conversation | null = null;
-    private creature: { spec: CreatureSpec } | null = null;
-    onQuest?: (q: QuestOffer, spec: CreatureSpec) => void;
+    private creature: { spec: Speaker } | null = null;
+    onQuest?: (q: QuestOffer, spec: Speaker) => void;
     onClose?: () => void;
 
     private onKey = (e: KeyboardEvent) => {
@@ -798,7 +802,7 @@ export class DialogBox {
 
     get open() { return !this.root.hidden; }
 
-    start(spec: CreatureSpec, world: WorldBrief, questState: 'none' | 'active', memory: CreatureMemory) {
+    start(spec: Speaker, world: WorldBrief, questState: 'none' | 'active', memory: CreatureMemory) {
         this.talk?.cancel();
         this.creature = { spec };
         this.root.hidden = false;
@@ -887,7 +891,9 @@ export class DialogBox {
             const q = turn.quest;
             const card = document.createElement('div');
             card.className = 'quest';
-            const what = q.type === 'kill' ? `уничтожить: ${q.count} × ${ENEMY_RU[q.enemy ?? 'drone']} у тела «${q.body}»` : `долететь до «${q.body}»`;
+            const what = q.type === 'kill'
+                ? `уничтожить: ${q.count} × ${ENEMY_RU[q.enemy ?? 'drone']} ${isGround(q.enemy ?? '') ? `на поверхности (${q.body})` : `у тела «${q.body}»`}`
+                : q.type === 'collect' ? `собрать ${q.count} (${q.item}) здесь, на поверхности` : `долететь до «${q.body}»`;
             card.innerHTML = '<b></b><p></p><small></small>';
             card.querySelector('b')!.textContent = `📜 ${q.title}`;
             card.querySelector('p')!.textContent = q.brief;
@@ -955,4 +961,5 @@ export class DialogBox {
 const ENEMY_RU: Record<string, string> = {
     drone: 'дроны', fighter: 'пиратские штурмовики', crystal: 'кристаллиды', leviathan: 'левиафан',
     interceptor: 'перехватчики', gunship: 'канонерки', hive: 'улей',
+    skitter: 'скиттеры', sentinel: 'шагоходы-стражи', wraith: 'призрачные охотники', brute: 'громилы',
 };

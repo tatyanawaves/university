@@ -4,6 +4,7 @@
 // the same numbers work from the ground and from orbit without float32 loss.
 
 import type { PlanetKind } from './mandelbrot';
+import { RELIEF, worldLook, WorldLook } from './worlds';
 
 export interface AtmosphereParams {
     /** Top of the atmosphere, in planet radii (1 = surface). */
@@ -40,6 +41,8 @@ export interface SurfaceParams {
     craters: boolean;
     palette: 'earth' | 'mars' | 'moon' | 'ice' | 'lava' | 'venus' | 'desert' | 'titan';
     gravity: number;
+    /** What the ground is made of, clouds, seas, rocks, plants. */
+    look: WorldLook;
 }
 
 const per = (radiusM: number, v: [number, number, number]): [number, number, number] =>
@@ -66,6 +69,12 @@ export function earthAtmosphere(radiusM = 6.371e6): AtmosphereParams {
  * System get their own numbers; generated planets follow their kind.
  */
 export function surfaceFor(name: string, kind: PlanetKind | 'moon', radiusKm: number, gravity: number): SurfaceParams {
+    const s = baseSurface(name, kind, radiusKm, gravity);
+    const known = RELIEF[name];
+    return { ...s, ...(known ?? {}), look: worldLook(name, kind) };
+}
+
+function baseSurface(name: string, kind: PlanetKind | 'moon', radiusKm: number, gravity: number): Omit<SurfaceParams, 'look'> {
     const R = radiusKm * 1000;
     const base = { radiusM: R, gravity, craters: false, sea: null as number | null };
     switch (name) {
@@ -102,8 +111,8 @@ export function surfaceFor(name: string, kind: PlanetKind | 'moon', radiusKm: nu
     }
     switch (kind) {
         case 'earth': return { ...base, atmosphere: earthAtmosphere(R), relief: 2500, sea: 0, palette: 'earth' };
-        case 'desert': return surfaceFor('Марс', 'desert', radiusKm, gravity);
-        case 'venus': return surfaceFor('Венера', 'venus', radiusKm, gravity);
+        case 'desert': return baseSurface('Марс', 'desert', radiusKm, gravity);
+        case 'venus': return baseSurface('Венера', 'venus', radiusKm, gravity);
         case 'ice': return { ...base, atmosphere: null, relief: 1500, palette: 'ice', craters: true };
         case 'lava': return { ...base, atmosphere: null, relief: 1200, palette: 'lava' };
         case 'moon':
