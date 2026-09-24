@@ -695,7 +695,7 @@ export class SurfaceGame {
         const wish = forward.multiplyScalar(fwd).addScaledVector(right, strafe);
         if (wish.lengthSq() > 1) wish.normalize();
         // Wading slows the robot down.
-        const ground = this.ctx.groundAt(this.robotPos.x, this.robotPos.z);
+        const ground = this.standAt(this.robotPos.x, this.robotPos.z);
         const wading = this.ctx.sea !== null && ground < this.ctx.sea;
         const speed = (sprint ? RUN : WALK) * (wading ? 0.5 : 1);
         const accel = this.grounded ? 22 : 4;
@@ -723,12 +723,14 @@ export class SurfaceGame {
         if (!this.grounded) this.robotVel.y -= g * dt;
         // Move, round trunks and boulders, not into deep water, not up cliffs.
         const next = this.robotPos.clone().addScaledVector(this.robotVel, dt);
-        const nextGround = this.ctx.groundAt(next.x, next.z);
+        const nextGround = this.standAt(next.x, next.z);
         if (this.ctx.sea !== null && nextGround < this.ctx.sea - 1.2) { next.x = this.robotPos.x; next.z = this.robotPos.z; this.robotVel.x = this.robotVel.z = 0; }
         const climb = (nextGround - ground) / Math.max(Math.hypot(next.x - this.robotPos.x, next.z - this.robotPos.z), 1e-3);
         if (this.grounded && climb > 1.2) { next.x = this.robotPos.x; next.z = this.robotPos.z; }
         this.pushOut(next);
-        const floor = this.ctx.groundAt(next.x, next.z);
+        // The hold and the hull are solid: only the ramp leads up (F boards the ship).
+        if (this.inHull(next.x, next.z, next.y)) { next.x = this.robotPos.x; next.z = this.robotPos.z; this.robotVel.x = this.robotVel.z = 0; }
+        const floor = this.standAt(next.x, next.z);
         if (next.y <= floor + 0.02 || (this.grounded && next.y - floor < 0.6 && this.robotVel.y <= 0)) {
             if (!this.grounded && this.robotVel.y < -6) this.particles.burst(next.clone().setY(floor), 14, 2, this.ctx.dustColor, 0.45, 1.4, 0.2, 1);
             next.y = floor;
@@ -873,13 +875,39 @@ export class SurfaceGame {
         return !!o && Math.hypot(o.x - x, o.z - z) < o.r + 0.3;
     };
 
+    /** What the robot stands on: the ground, or the lowered ramp (a solid plate, not a picture). */
+    private standAt(x: number, z: number): number {
+        const g = this.ctx.groundAt(x, z);
+        if (!this.ship || this.rampOpen < 0.5) return g;
+        const local = new THREE.Vector3(x - this.shipPos.x, 0, z - this.shipPos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.shipYaw);
+        if (Math.abs(local.x) > 1.3) return g;
+        const a = this.rampAngle * THREE.MathUtils.smoothstep(this.rampOpen, 0, 1);
+        const along = local.z - HINGE.z;
+        if (along < 0 || along > RAMP_LEN * Math.cos(a)) return g;
+        return Math.max(g, this.shipPos.y + HINGE.y + 0.1 - along * Math.tan(a));
+    }
+
+    /** Inside the ship's hull (beyond the top of the ramp, or into the belly from the ramp). */
+    private inHull(x: number, z: number, y: number): boolean {
+        if (!this.ship) return false;
+        const local = new THREE.Vector3(x - this.shipPos.x, 0, z - this.shipPos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.shipYaw);
+        const bellyY = this.shipPos.y - 4.2;
+        // Only a robot high enough to reach the hull can bump into it; under the belly there is room.
+        if (y + 1.9 < bellyY) return false;
+        return Math.abs(local.x) < 4.5 && local.z > -24 && local.z < HINGE.z + 0.6;
+    }
+
     /** Coming over, or parked and waiting. */
     private carIdle(dt: number) {
         const v = this.vehicle!;
         const g = Math.max(this.ctx.gravity, 0.5);
         if (this.carState === 'coming') {
-            const to = this.carWay[0] ?? this.robotPos;
-            if (this.carWay.length <= 1) this.carWay[0] = this.robotPos.clone();
+            // The last leg ends beside the robot, not on top of it.
+            if (this.carWay.length <= 1) {
+                const off = v.pos.clone().sub(this.robotPos).setY(0);
+                this.carWay[0] = this.robotPos.clone().add(off.lengthSq() > 1e-4 ? off.setLength(3) : new THREE.Vector3(3, 0, 0));
+            }
+            const to = this.carWay[0];
             if (v.autoDrive(dt, to, this.carGround, this.carBlocked, g)) {
                 this.carWay.shift();
                 if (!this.carWay.length) { this.carState = 'parked'; this.ctx.toast('🚙 Вездеход подъехал. E — сесть'); }

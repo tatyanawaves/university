@@ -197,7 +197,7 @@ export class Vehicle {
     autoDrive(dt: number, to: THREE.Vector3, ground: (x: number, z: number) => number, blocked: (x: number, z: number) => boolean, gravity: number): boolean {
         const d = new THREE.Vector3(to.x - this.pos.x, 0, to.z - this.pos.z);
         const dist = d.length();
-        if (dist < 4) {
+        if (dist < 2.5) {
             this.update(dt, { throttle: 0, steer: 0, brake: true, boost: false }, ground, blocked, gravity);
             return Math.abs(this.speed) < 0.3;
         }
