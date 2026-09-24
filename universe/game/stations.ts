@@ -254,7 +254,8 @@ export class Portals {
         return true;
     }
 
-    update(time: number, pilot: THREE.Vector3, bodyByName: (n: string) => BodyLike | undefined, starPos: THREE.Vector3, camera: THREE.Camera, w: number, h: number) {
+    /** `only`: the title of the one portal that may open (the autopilot's target), or null for any. */
+    update(time: number, pilot: THREE.Vector3, bodyByName: (n: string) => BodyLike | undefined, starPos: THREE.Vector3, camera: THREE.Camera, w: number, h: number, only: string | null = null) {
         for (const p of this.list) {
             const ok = this.place(p, bodyByName, starPos);
             p.group.visible = p.label.visible = ok;
@@ -268,7 +269,7 @@ export class Portals {
             const d0 = r0.dot(normal), d1 = r1.dot(normal);
             // A jump (a teleport, a return from a surface) is not a flight through anything.
             const jump = r0.distanceTo(r1) > p.radius * 40;
-            if (!this.used && !jump && d0 !== d1 && d0 * d1 <= 0) {
+            if (!this.used && !jump && (!only || only === p.spec.title) && d0 !== d1 && d0 * d1 <= 0) {
                 const hit = r0.lerp(r1, d0 / (d0 - d1));
                 if (hit.length() < p.radius * 0.95) {
                     this.used = true;
