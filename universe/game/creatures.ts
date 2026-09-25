@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../mandelbrot';
-import { ACCEPT, APOLOGY, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, Provider, QuestOffer, REFUSE_MOOD, saveModelKey, WorldBrief } from './dialogue';
+import { ACCEPT, APOLOGY, Conversation, CreatureMind, DECLINE, describeAccess, DialogueTurn, ENEMY_RU, Provider, QuestOffer, REFUSE_MOOD, saveModelKey, WorldBrief } from './dialogue';
 import { CreatureMemory, progress } from './progress';
 import { isGround } from './missions';
 
@@ -821,7 +821,7 @@ export class DialogBox {
         }
         memory.talks++;
         progress.save();
-        this.talk = new Conversation(spec, world, memory);
+        this.talk = new Conversation(spec, world, memory, progress.shared());
         this.root.querySelector('header small')!.textContent = `${spec.species} · ${describeAccess(this.talk.access)}`;
         this.renderFooter(!this.talk.access);
         if (memory.mood <= REFUSE_MOOD) {
@@ -958,8 +958,3 @@ export class DialogBox {
     }
 }
 
-const ENEMY_RU: Record<string, string> = {
-    drone: 'дроны', fighter: 'пиратские штурмовики', crystal: 'кристаллиды', leviathan: 'левиафан',
-    interceptor: 'перехватчики', gunship: 'канонерки', hive: 'улей',
-    skitter: 'скиттеры', sentinel: 'шагоходы-стражи', wraith: 'призрачные охотники', brute: 'громилы',
-};

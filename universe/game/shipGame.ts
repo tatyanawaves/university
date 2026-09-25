@@ -186,11 +186,13 @@ export class ShipGame {
         this.log.onComplete = m => {
             this.combat.player.score += m.reward;
             this.rememberErrand(m, 'done');
+            progress.deed(`выполнил(а) задание «${m.title}» (${m.location})`);
             this.toast(`Миссия выполнена: «${m.title}» (+${m.reward})`);
             this.renderPanel();
         };
         this.log.onFail = m => {
             this.rememberErrand(m, 'failed');
+            progress.deed(`провалил(а) задание «${m.title}» (${m.location})`);
             this.toast(`Миссия провалена: «${m.title}»`);
             this.renderPanel();
         };
