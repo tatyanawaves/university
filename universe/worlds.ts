@@ -84,6 +84,8 @@ export interface WorldLook {
     liquid: Liquid | null;
     /** Grass and forests. */
     flora: boolean;
+    /** Tint of the plants against Earth's greens (alien worlds grow teal, purple or crimson ones). */
+    foliage?: RGB;
     /** Boulders lying about: how many (0…1), what they look like and their colour. */
     rocks: { density: number; shape: 'boulder' | 'slab' | 'ice' | 'pebble'; color: RGB };
     /** What is there to gather, as it reads after «собрать» (accusative plural). */
@@ -230,27 +232,91 @@ const LOOKS: Record<string, WorldLook> = {
     'Рея': icy([0.7, 0.7, 0.7], [0.5, 0.5, 0.52]),
 };
 
-/** Looks for generated worlds, by kind. */
-function byKind(kind: PlanetKind | 'moon'): WorldLook {
-    switch (kind) {
-        case 'earth': return LOOKS['Земля'];
-        case 'desert': return LOOKS['Марс'];
-        case 'venus': return LOOKS['Венера'];
-        case 'ice': return { ...LOOKS['Европа'], note: 'Ледяная кора; трещины, заполненные солями, выдают океан под ней.' };
-        case 'lava': return {
-            material: { a: [0.07, 0.06, 0.055], b: [0.03, 0.028, 0.026], rock: [0.05, 0.045, 0.04], c: [0.16, 0.13, 0.11], d: [1, 0.3, 0.05], feature: FEATURE.lava, rough: 0.8 },
-            clouds: null, liquid: null, flora: false,
-            rocks: { density: 0.5, shape: 'boulder', color: [0.05, 0.045, 0.04] },
-            item: 'образцы обсидиана',
-            note: 'Молодая базальтовая корка над океаном магмы; в трещинах и низинах светится расплав.',
-        };
-        default: return LOOKS['Луна'];
-    }
+export function worldLook(name: string, kind: PlanetKind | 'moon'): WorldLook {
+    // Generated planets are named after their star: «PTK 12345 b». Each gets its own make-up.
+    if (LOOKS[name]) return LOOKS[name];
+    let h = 2166136261;
+    for (const ch of name) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+    return proceduralLook(kind, h >>> 0);
 }
 
-export function worldLook(name: string, kind: PlanetKind | 'moon'): WorldLook {
-    // Generated planets are named after their star: «PTK 12345 b».
-    return LOOKS[name] ?? byKind(kind);
+// ---------------------------------------------------------------------------
+// Worlds nobody has seen: what they are made of decides how they look.
+// ---------------------------------------------------------------------------
+
+interface Composition {
+    /** What the ground is made of, for the info panel. */
+    note: string;
+    a: RGB; b: RGB; rock: RGB; c: RGB; d: RGB;
+    feature: number;
+    rough: number;
+    rocks: WorldLook['rocks']['shape'];
+    item: string;
+}
+
+const COMPOSITIONS: Partial<Record<PlanetKind | 'moon', Composition[]>> = {
+    desert: [
+        { note: 'Железистые пески и базальт, покрытые пылью оксидов железа — как Марс, но теплее.', a: [0.36, 0.17, 0.07], b: [0.17, 0.09, 0.05], rock: [0.22, 0.12, 0.065], c: [0.45, 0.27, 0.14], d: [0.12, 0.075, 0.055], feature: FEATURE.mars, rough: 0.92, rocks: 'boulder', item: 'образцы грунта' },
+        { note: 'Соляные равнины и гипсовые дюны на месте высохших морей: белая корка трескается многоугольниками.', a: [0.75, 0.72, 0.65], b: [0.5, 0.44, 0.36], rock: [0.4, 0.35, 0.3], c: [0.85, 0.83, 0.78], d: [0.55, 0.5, 0.42], feature: FEATURE.venus, rough: 0.8, rocks: 'slab', item: 'кристаллы соли' },
+        { note: 'Сернистые пустыни вулканического мира: жёлтые и охристые отложения серы на тёмном базальте.', a: [0.55, 0.45, 0.12], b: [0.25, 0.18, 0.08], rock: [0.2, 0.17, 0.12], c: [0.7, 0.62, 0.3], d: [0.3, 0.2, 0.08], feature: FEATURE.mars, rough: 0.85, rocks: 'boulder', item: 'кристаллы серы' },
+        { note: 'Тёмные углистые пески и обсидиан: мир, где лава остыла быстро и остекленела.', a: [0.12, 0.1, 0.09], b: [0.05, 0.045, 0.045], rock: [0.08, 0.07, 0.07], c: [0.2, 0.18, 0.2], d: [0.06, 0.05, 0.05], feature: FEATURE.mars, rough: 0.7, rocks: 'slab', item: 'образцы обсидиана' },
+    ],
+    ice: [
+        { note: 'Водяной лёд с прожилками солей из подлёдного океана.', a: [0.7, 0.68, 0.64], b: [0.55, 0.5, 0.45], rock: [0.5, 0.48, 0.46], c: [0.35, 0.18, 0.09], d: [0.45, 0.33, 0.24], feature: FEATURE.europa, rough: 0.5, rocks: 'ice', item: 'пробы льда' },
+        { note: 'Азотный и метановый иней: розоватые поля, тёмные полосы гейзеров.', a: [0.8, 0.66, 0.62], b: [0.55, 0.48, 0.45], rock: [0.6, 0.56, 0.55], c: [0.2, 0.16, 0.15], d: [0.9, 0.85, 0.82], feature: FEATURE.triton, rough: 0.6, rocks: 'ice', item: 'пробы азотного льда' },
+        { note: 'Аммиачный лёд с голубоватым отливом, трещины с тёплой слякотью.', a: [0.78, 0.86, 0.92], b: [0.6, 0.7, 0.8], rock: [0.55, 0.62, 0.7], c: [0.3, 0.5, 0.7], d: [0.6, 0.75, 0.9], feature: FEATURE.enceladus, rough: 0.4, rocks: 'ice', item: 'ледяные кристаллы' },
+    ],
+    lava: [
+        { note: 'Молодая базальтовая корка над океаном магмы; в трещинах светится расплав.', a: [0.07, 0.06, 0.055], b: [0.03, 0.028, 0.026], rock: [0.05, 0.045, 0.04], c: [0.16, 0.13, 0.11], d: [1, 0.3, 0.05], feature: FEATURE.lava, rough: 0.8, rocks: 'boulder', item: 'образцы обсидиана' },
+        { note: 'Раскалённый мир с серными озёрами: расплав светится жёлто-зелёным.', a: [0.12, 0.1, 0.04], b: [0.05, 0.04, 0.02], rock: [0.08, 0.07, 0.04], c: [0.3, 0.25, 0.08], d: [0.8, 0.9, 0.1], feature: FEATURE.lava, rough: 0.75, rocks: 'slab', item: 'кристаллы серы' },
+    ],
+    rocky: [
+        { note: 'Серый силикатный реголит, изрытый кратерами: мир без воздуха, как Луна.', a: [0.17, 0.165, 0.155], b: [0.065, 0.063, 0.06], rock: [0.12, 0.118, 0.112], c: [0.27, 0.265, 0.25], d: [0.1, 0.1, 0.1], feature: FEATURE.moon, rough: 0.95, rocks: 'boulder', item: 'образцы реголита' },
+        { note: 'Углистый реголит — тёмный, богатый органикой, как у древнейших астероидов.', a: [0.07, 0.065, 0.06], b: [0.045, 0.042, 0.04], rock: [0.06, 0.055, 0.05], c: [0.1, 0.095, 0.09], d: [0.05, 0.05, 0.05], feature: FEATURE.phobos, rough: 0.97, rocks: 'boulder', item: 'образцы углистого грунта' },
+        { note: 'Железистый реголит: ржаво-бурые равнины с блестящими каплями металла от ударов.', a: [0.26, 0.15, 0.1], b: [0.12, 0.08, 0.06], rock: [0.18, 0.13, 0.1], c: [0.35, 0.3, 0.28], d: [0.1, 0.07, 0.05], feature: FEATURE.mercury, rough: 0.9, rocks: 'boulder', item: 'железистые образцы' },
+    ],
+};
+
+/** Plant colours of living worlds: chlorophyll, and pigments tuned to other suns. */
+const FOLIAGE: { tint: RGB; note: string }[] = [
+    { tint: [1, 1, 1], note: 'Растения зелёные, как на Земле: хлорофилл под жёлтой звездой.' },
+    { tint: [0.6, 1.1, 1.3], note: 'Листва бирюзовая: пигменты ловят свет звезды, более горячей, чем Солнце.' },
+    { tint: [1.8, 0.55, 1.6], note: 'Растения фиолетовые: под красным карликом выгоднее поглощать весь видимый свет.' },
+    { tint: [2.4, 0.8, 0.35], note: 'Листва багрово-оранжевая, как земная осень: здесь правят каротиноиды.' },
+    { tint: [1.6, 1.4, 0.4], note: 'Желтоватая растительность под белой звездой, трава сухая и жёсткая.' },
+];
+
+const pickOf = <T>(list: T[], h: number) => list[h % list.length];
+const vary = (c: RGB, h: number, amount = 0.15): RGB => {
+    const k = 1 + (((h >>> 3) % 1000) / 1000 - 0.5) * amount * 2;
+    return [Math.min(1, c[0] * k), Math.min(1, c[1] * k), Math.min(1, c[2] * k)];
+};
+
+function proceduralLook(kind: PlanetKind | 'moon', h: number): WorldLook {
+    if (kind === 'earth') {
+        const base = LOOKS['Земля'];
+        const f = pickOf(FOLIAGE, h >>> 5);
+        const cover = 0.25 + ((h >>> 9) % 100) / 200;
+        return {
+            ...base,
+            foliage: f.tint,
+            clouds: { ...base.clouds!, cover },
+            liquid: { ...WATER, shallow: vary(WATER.shallow, h >>> 11, 0.3) },
+            note: `Суша из гранита и базальта, океаны жидкой воды. ${f.note}`,
+            item: 'образцы биомассы',
+        };
+    }
+    if (kind === 'venus') return LOOKS['Венера'];
+    const list = COMPOSITIONS[kind === 'moon' ? 'rocky' : kind] ?? COMPOSITIONS.rocky!;
+    const c = pickOf(list, h >>> 4);
+    const k = h >>> 13;
+    return {
+        material: { a: vary(c.a, k), b: vary(c.b, k >>> 2), rock: vary(c.rock, k >>> 4), c: c.c, d: c.d, feature: c.feature, rough: c.rough },
+        clouds: null, liquid: null, flora: false,
+        rocks: { density: 0.25 + ((h >>> 7) % 50) / 100, shape: c.rocks, color: vary(c.rock, k >>> 6) },
+        item: c.item,
+        note: c.note,
+    };
 }
 
 /** Relief amplitude and craters for the real bodies whose landscapes are known. */

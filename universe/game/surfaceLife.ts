@@ -627,3 +627,119 @@ export function makeItem(color: number): THREE.Group {
     g.add(pillar);
     return g;
 }
+
+// ---------------------------------------------------------------------------
+// What the beings build: each kind its own thing, put up stage by stage.
+// ---------------------------------------------------------------------------
+
+export interface Structure {
+    group: THREE.Group;
+    /** Parts in the order they go up; the first `ceil(progress · n)` are shown. */
+    stages: THREE.Object3D[];
+    /** Scaffolding, shown while the work is on. */
+    scaffold: THREE.Group;
+    name: string;
+}
+
+const STRUCTURE_NAMES: Record<BeingKind, string> = {
+    colonist: 'жилой купол', android: 'радиомачту', rover: 'солнечную ферму', golem: 'каменный круг', crawler: 'гнездо-курган', sprite: 'сад светящихся кристаллов',
+};
+
+export function makeStructure(kind: BeingKind, color: number): Structure {
+    const group = new THREE.Group();
+    const stages: THREE.Object3D[] = [];
+    const add = (o: THREE.Object3D) => { o.visible = false; group.add(o); stages.push(o); return o; };
+    const metal = std(0xb8bec8, 0.7, 0.35), dark = std(0x30343c, 0.6, 0.5), white = std(0xe8e6e0, 0.2, 0.6);
+    switch (kind) {
+        case 'colonist': {
+            add(at(new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.4, 0.4, 32), dark), 0, 0.2, 0));
+            for (let i = 0; i < 4; i++) {
+                const ring = new THREE.Mesh(new THREE.SphereGeometry(4, 32, 8, 0, Math.PI * 2, (i / 4) * Math.PI / 2, Math.PI / 8), white);
+                add(at(ring, 0, 0.3, 0));
+            }
+            add(at(new THREE.Mesh(rbox(1.6, 2.2, 2, 0.2), metal), 0, 1.3, 4.2));
+            add(at(new THREE.Mesh(new THREE.BoxGeometry(1, 1.6, 0.05), glowMat(0xffe2a8, 2)), 0, 1.2, 5.22));
+            const mast = at(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3, 6), metal), 2, 4.8, 0);
+            add(mast);
+            add(at(new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), glowMat(0xff4040, 4)), 2, 6.3, 0));
+            break;
+        }
+        case 'android': {
+            for (let i = 0; i < 6; i++) add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.5 - i * 0.06, 0.56 - i * 0.06, 1.6, 4, 1, true), metal), 0, 0.8 + i * 1.6, 0)).rotateY(i * 0.2);
+            const dish = at(new THREE.Mesh(new THREE.SphereGeometry(1.4, 24, 8, 0, Math.PI * 2, 0, 0.9), white), 0, 10, 0.3);
+            dish.rotation.x = -1.1;
+            add(dish);
+            add(at(new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), glowMat(0x46d9ff, 4)), 0, 10.4, -0.3));
+            break;
+        }
+        case 'rover': {
+            for (let i = 0; i < 8; i++) {
+                const x = (i % 4) * 2.4 - 3.6, z = Math.floor(i / 4) * 2.6 - 1.3;
+                const leg = at(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 6), metal), x, 0.5, z);
+                const panel = at(new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.06, 1.6), std(0x1a2c55, 0.6, 0.2)), x, 1.05, z);
+                panel.rotation.x = -0.35;
+                const g = new THREE.Group();
+                g.add(leg, panel);
+                add(g);
+            }
+            add(at(new THREE.Mesh(rbox(1.2, 1, 0.8, 0.1), white), 5.5, 0.5, 0));
+            break;
+        }
+        case 'golem': {
+            for (let i = 0; i < 7; i++) {
+                const a = (i / 7) * Math.PI * 2;
+                const h = 2 + (i % 3) * 0.7;
+                const stone = at(new THREE.Mesh(new THREE.BoxGeometry(0.9, h, 0.6), std(color, 0.05, 0.95)), Math.cos(a) * 4, h / 2, Math.sin(a) * 4);
+                stone.rotation.y = -a;
+                add(stone);
+            }
+            add(at(new THREE.Mesh(new THREE.OctahedronGeometry(0.5, 0), glowMat(0xff9a3c, 2.5)), 0, 1.2, 0));
+            break;
+        }
+        case 'crawler': {
+            for (let i = 0; i < 4; i++) {
+                const m = at(new THREE.Mesh(new THREE.SphereGeometry(2.6 - i * 0.45, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), std(0x6b5238, 0.05, 1)), (i - 1.5) * 0.3, 0, (i % 2) * 0.4);
+                m.scale.y = 0.55 + i * 0.12;
+                add(m);
+            }
+            for (let i = 0; i < 3; i++) {
+                const a = i * 2.1;
+                add(at(new THREE.Mesh(new THREE.CircleGeometry(0.45, 16), std(0x0a0806, 0, 1)), Math.cos(a) * 2.3, 0.35, Math.sin(a) * 2.3)).lookAt(Math.cos(a) * 5, 0.35, Math.sin(a) * 5);
+            }
+            break;
+        }
+        case 'sprite': {
+            for (let i = 0; i < 9; i++) {
+                const a = i * 2.39, r = 0.8 + i * 0.35;
+                const cr = at(new THREE.Mesh(new THREE.OctahedronGeometry(0.3 + (i % 3) * 0.15, 0), glowMat(color, 3)), Math.cos(a) * r, 0.5 + (i % 3) * 0.3, Math.sin(a) * r);
+                cr.scale.y = 2.5;
+                add(cr);
+            }
+            break;
+        }
+    }
+    // Scaffolding: a light frame of poles round the site.
+    const scaffold = new THREE.Group();
+    for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        scaffold.add(at(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 5, 5), std(0xd9a441, 0.3, 0.6)), Math.cos(a) * 5, 2.5, Math.sin(a) * 5));
+    }
+    group.add(scaffold);
+    return { group, stages, scaffold, name: STRUCTURE_NAMES[kind] };
+}
+
+/** What beings say to each other, overheard. */
+export const CHATTER = [
+    ['Видел(а) новый корабль у трапа?', 'Видел(а). Робот в нём вежливый, говорят.'],
+    ['Ночью опять шумели скиттеры.', 'Я слышал(а). Надо укрепить стены.'],
+    ['Как продвигается стройка?', 'Медленно, но верно. Ещё пара смен.'],
+    ['Ты веришь в слухи про свет за горизонтом?', 'Верю только своим глазам. И сенсорам.'],
+    ['Смотри, какой закат!', 'Каждый день новый. Никогда не надоест.'],
+    ['Мне нужна помощь с грузом.', 'После смены — обязательно.'],
+    ['Что думаешь о пилоте?', 'Посмотрим, как справится с поручением.'],
+    ['Грунт сегодня твёрже обычного.', 'Мороз. Или бурю ждать.'],
+    ['Давно не было вестей с орбиты.', 'Пираты глушат связь, не иначе.'],
+    ['Я нашёл(а) блестящий камень!', 'Покажи! …Ох, это просто стекло.'],
+];
+
+export const structureName = (kind: BeingKind) => STRUCTURE_NAMES[kind];

@@ -292,6 +292,7 @@ uniform vec3 uColC;
 uniform vec3 uColD;
 uniform int uFeature;
 uniform float uRoughness;
+uniform vec3 uFoliage;
 
 // The nearest crater of the field tcraters() draws: distance in its radii, how fresh it is,
 // and the direction from its centre (for ray streaks).
@@ -309,6 +310,21 @@ vec4 craterNear(vec2 q) {
         if (dn < best.x) best = vec4(dn, thash(c + vec2(3.0, 23.0)), atan(d.y, d.x), r);
     }
     return best;
+}
+
+// Worley noise: distance to the nearest and second-nearest jittered point, and the nearest one's id.
+vec3 cellular(vec2 p) {
+    vec2 i0 = floor(p);
+    float f1 = 8.0, f2 = 8.0, id = 0.0;
+    for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++) {
+        vec2 c = i0 + vec2(float(i), float(j));
+        vec2 pt = c + vec2(thash(c), thash(c + vec2(31.0, 17.0)));
+        float d = length(p - pt);
+        if (d < f1) { f2 = f1; f1 = d; id = thash(c + vec2(5.0, 9.0)); }
+        else if (d < f2) f2 = d;
+    }
+    return vec3(f1, f2, id);
 }
 
 struct Mat { vec3 albedo; float rough; vec3 glow; };
@@ -339,6 +355,8 @@ Mat material(float h, vec3 N, vec2 xz, float cavity, float dist) {
         float forestMask = smoothstep(0.02, 0.18, nf) * smoothstep(0.6, 0.3, rel) * smoothstep(0.7, 0.9, N.y);
         vec3 alpine = vec3(0.28, 0.26, 0.18);
         vec3 sand = vec3(0.6, 0.53, 0.38);
+        meadow = min(meadow * uFoliage, vec3(0.5));
+        forest = min(forest * uFoliage, vec3(0.3));
         vec3 veg = mix(meadow, forest, forestMask);
         veg = mix(veg, alpine, smoothstep(0.55, 0.85, rel + n2 * 0.08));
         vec3 c = mix(rock, veg, level);
@@ -432,12 +450,12 @@ Mat material(float h, vec3 N, vec2 xz, float cavity, float dist) {
             c = mix(c, sand, low * level);
             c = mix(c, uColC, smoothstep(0.4, 0.7, n1 + n3 * 0.3) * level * 0.4);
         } else if (uFeature == 11) {
-            // Venus: platy basalt cracked into slabs, rough tesserae on the heights.
-            vec2 cell = floor(xz * 0.35);
-            vec2 f = fract(xz * 0.35) - 0.5;
-            float plate = thash(cell);
-            float crack = smoothstep(0.43, 0.49, max(abs(f.x), abs(f.y)) + tnoise(xz * 1.3) * 0.05) * smoothstep(80.0, 15.0, dist);
-            c *= (0.85 + 0.3 * plate * smoothstep(80.0, 15.0, dist)) * (1.0 - crack * 0.6);
+            // Venus: platy basalt cracked into irregular slabs (a cellular pattern, not a grid),
+            // rough tesserae on the heights.
+            vec3 cell = cellular(xz * 0.35 + vec2(tnoise(xz * 0.05), tnoise(xz * 0.05 + 7.0)) * 0.4);
+            float near = smoothstep(90.0, 15.0, dist);
+            float crack = smoothstep(0.09, 0.02, cell.y - cell.x) * near;
+            c *= (0.85 + 0.3 * cell.z * near) * (1.0 - crack * 0.55);
             c = mix(c, uColC * (0.8 + 0.4 * abs(n2)), smoothstep(0.35, 0.6, rel + n1 * 0.2));
         } else if (uFeature == 13) {
             // Phobos: chains of pits in parallel grooves.

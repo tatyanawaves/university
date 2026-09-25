@@ -40,6 +40,8 @@ export interface CreatureMemory {
     said: string[];
     /** Errands it gave, and how they went. */
     errands: { title: string; state: 'active' | 'done' | 'failed' }[];
+    /** Stories it has already told the pilot, so it tells new ones next time. */
+    told?: string[];
 }
 
 export interface SavedLog { missions: Mission[]; activeId: string | null }
@@ -56,6 +58,8 @@ export interface SaveData {
     path: LevelRequest[] | null;
     stats: { kills: number; errands: number; seconds: number };
     savedAt: number;
+    /** How far along the locals' buildings are (0…1), by planet and builder. */
+    builds?: Record<string, number>;
 }
 
 const KEY = 'university_save_v1';

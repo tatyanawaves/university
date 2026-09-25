@@ -229,7 +229,8 @@ export class Scatter {
         };
 
         if (look.flora) {
-            const leaves = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0 });
+            const tint = new THREE.Color(...(look.foliage ?? [1, 1, 1]));
+            const leaves = new THREE.MeshStandardMaterial({ vertexColors: true, color: tint, roughness: 0.85, metalness: 0 });
             windy(leaves, 0.03);
             this.materials.push(leaves);
             this.trees = new Field(scene, TREES, [spruce(), broadleaf()], leaves, (i, j) => {
@@ -249,7 +250,7 @@ export class Scatter {
                 return { x, z, y: h - 0.3, size, rot: r[3] * Math.PI * 2, tilt: 0, tint: 0.8 + 0.4 * r[1], variant: spruceTree ? 0 : 1 };
             });
             this.fields.push(this.trees);
-            const blades = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+            const blades = new THREE.MeshStandardMaterial({ vertexColors: true, color: tint, roughness: 1, metalness: 0, side: THREE.DoubleSide });
             windy(blades, 0.25);
             this.materials.push(blades);
             this.fields.push(new Field(scene, GRASS, [tuft()], blades, (i, j) => {

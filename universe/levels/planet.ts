@@ -171,6 +171,7 @@ export class PlanetLevel implements Level {
             uColD: { value: new THREE.Vector3(...mat.d) },
             uFeature: { value: mat.feature },
             uRoughness: { value: mat.rough },
+            uFoliage: { value: new THREE.Vector3(...(look.foliage ?? [1, 1, 1])) },
             uSea: { value: s.sea ?? -1e5 },
             uOffset: { value: new THREE.Vector2() },
             uTime: { value: 0 },

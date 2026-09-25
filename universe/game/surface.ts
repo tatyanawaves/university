@@ -16,8 +16,9 @@ import { GroundKind, isGround } from './missions';
 import { makeShip } from './models';
 import { effects, progress } from './progress';
 import { Robot } from './robot';
+import { Vehicle } from './vehicle';
 import { addErrandTo, errandMission, ShipGame } from './shipGame';
-import { BeingSpec, FOES, FoeDef, makeBeing, makeFoe, makeItem, Rig } from './surfaceLife';
+import { BeingSpec, CHATTER, FOES, FoeDef, makeBeing, makeFoe, makeItem, makeStructure, Rig, Structure } from './surfaceLife';
 
 export interface SurfaceContext {
     scene: THREE.Scene;
@@ -186,11 +187,17 @@ interface Being {
     yaw: number;
     home: THREE.Vector2;
     target: THREE.Vector2 | null;
-    state: 'walk' | 'work' | 'greet';
+    state: 'walk' | 'work' | 'greet' | 'chat';
     timer: number;
     phase: number;
     hailed: boolean;
     shadow: THREE.Mesh;
+    /** What it is building, where, and how far along. */
+    build: { s: Structure; at: THREE.Vector2; key: string; progress: number } | null;
+    /** Walking over to (or talking with) another being. */
+    chatWith: Being | null;
+    /** On the way to the building site. */
+    toSite: boolean;
 }
 
 interface Item { mesh: THREE.Group; pos: THREE.Vector3; mission: string; item: string }
@@ -272,6 +279,7 @@ export class SurfaceGame {
         if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.jumpQueued = true; }
         if (e.code === 'KeyE') this.interact();
         if (e.code === 'KeyF') this.board();
+        if (e.code === 'KeyG') this.summon();
     };
     private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
     private onDown = (e: PointerEvent) => {
@@ -298,6 +306,7 @@ export class SurfaceGame {
         } else { this.lastTouch = null; return; }
         if (Math.abs(dx) > 150 || Math.abs(dy) > 150) return;
         this.camYaw -= dx * 0.0025;
+        this.lookedAt = this.time;
         this.camPitch = Math.max(-1.2, Math.min(0.9, this.camPitch - dy * 0.0025));
     };
     private onWheel = (e: WheelEvent) => {
@@ -455,6 +464,7 @@ export class SurfaceGame {
     /** Walk back up the ramp. */
     board() {
         if (this.mode !== 'walk') return;
+        if (this.driving) this.getOut();
         const end = this.rampEnd();
         if (this.robotPos.distanceTo(end) > BOARD_M * 1.6) { this.ctx.toast('Корабль далеко — подойдите к трапу'); return; }
         this.mode = 'boarding';
@@ -466,6 +476,8 @@ export class SurfaceGame {
 
     private interact() {
         if (this.mode !== 'walk') return;
+        if (this.driving) { this.getOut(); return; }
+        if (this.vehicle && this.carState === 'parked' && this.vehicle.pos.distanceTo(this.robotPos) < 4.5) { this.getIn(); return; }
         const b = this.nearestBeing();
         if (b) { this.talk(b); return; }
         if (this.robotPos.distanceTo(this.rampEnd()) < BOARD_M) this.board();
@@ -565,6 +577,7 @@ export class SurfaceGame {
         this.robot.root.visible = false;
         this.robotShadow.visible = false;
         this.hud.root.hidden = true;
+        this.stowCar();
         this.clearLife();
         return out;
     }
@@ -611,7 +624,8 @@ export class SurfaceGame {
         if (this.rampLight) this.rampLight.visible = this.rampOpen > 0.05;
 
         if (this.mode === 'exiting' || this.mode === 'boarding') this.scripted(dt, camera);
-        else if (this.mode === 'walk') this.walk(dt, camera);
+        else if (this.mode === 'walk') { if (this.driving) this.drive(dt, camera); else this.walk(dt, camera); }
+        if (this.vehicle && !this.driving) this.carIdle(dt);
         else if (this.mode === 'dead') this.dead(dt, camera);
 
         this.updateBeings(dt);
@@ -621,7 +635,8 @@ export class SurfaceGame {
         this.particles.update(dt);
         this.sparks.update(dt);
         this.robot.root.position.copy(this.robotPos);
-        this.robot.root.rotation.y = this.robotYaw;
+        if (this.driving && this.vehicle) this.robot.root.quaternion.copy(this.vehicle.bodyQuaternion);
+        else this.robot.root.rotation.set(0, this.robotYaw, 0);
         this.placeShadow(this.robotShadow, this.robotPos.x, this.robotPos.z, this.robotPos.y - this.ctx.groundAt(this.robotPos.x, this.robotPos.z));
         this.robotShadow.visible = this.robot.root.visible;
         // The head lamp comes on as the light goes.
@@ -680,7 +695,7 @@ export class SurfaceGame {
         const wish = forward.multiplyScalar(fwd).addScaledVector(right, strafe);
         if (wish.lengthSq() > 1) wish.normalize();
         // Wading slows the robot down.
-        const ground = this.ctx.groundAt(this.robotPos.x, this.robotPos.z);
+        const ground = this.standAt(this.robotPos.x, this.robotPos.z);
         const wading = this.ctx.sea !== null && ground < this.ctx.sea;
         const speed = (sprint ? RUN : WALK) * (wading ? 0.5 : 1);
         const accel = this.grounded ? 22 : 4;
@@ -708,12 +723,14 @@ export class SurfaceGame {
         if (!this.grounded) this.robotVel.y -= g * dt;
         // Move, round trunks and boulders, not into deep water, not up cliffs.
         const next = this.robotPos.clone().addScaledVector(this.robotVel, dt);
-        const nextGround = this.ctx.groundAt(next.x, next.z);
+        const nextGround = this.standAt(next.x, next.z);
         if (this.ctx.sea !== null && nextGround < this.ctx.sea - 1.2) { next.x = this.robotPos.x; next.z = this.robotPos.z; this.robotVel.x = this.robotVel.z = 0; }
         const climb = (nextGround - ground) / Math.max(Math.hypot(next.x - this.robotPos.x, next.z - this.robotPos.z), 1e-3);
         if (this.grounded && climb > 1.2) { next.x = this.robotPos.x; next.z = this.robotPos.z; }
         this.pushOut(next);
-        const floor = this.ctx.groundAt(next.x, next.z);
+        // The hold and the hull are solid: only the ramp leads up (F boards the ship).
+        if (this.inHull(next.x, next.z, next.y)) { next.x = this.robotPos.x; next.z = this.robotPos.z; this.robotVel.x = this.robotVel.z = 0; }
+        const floor = this.standAt(next.x, next.z);
         if (next.y <= floor + 0.02 || (this.grounded && next.y - floor < 0.6 && this.robotVel.y <= 0)) {
             if (!this.grounded && this.robotVel.y < -6) this.particles.burst(next.clone().setY(floor), 14, 2, this.ctx.dustColor, 0.45, 1.4, 0.2, 1);
             next.y = floor;
@@ -739,7 +756,7 @@ export class SurfaceGame {
         const aiming = this.aimFor > 0;
         const want = aiming ? this.camYaw : hs > 0.5 ? Math.atan2(-this.robotVel.x, -this.robotVel.z) : this.robotYaw;
         this.robotYaw += wrap(want - this.robotYaw) * (1 - Math.exp(-(aiming ? 18 : 9) * dt));
-        this.robot.update(dt, { speed: this.grounded ? hs : 0, grounded: this.grounded, jets: this.jets, aiming, aimPitch: this.camPitch + 0.12, gravity: g });
+        this.robot.update(dt, { speed: this.grounded ? hs : 0, grounded: this.grounded, jets: this.jets, aiming, aimPitch: this.camPitch + 0.12, gravity: g, yaw: this.robotYaw });
 
         // Camera: over the right shoulder, pulled in closer while aiming, never under the ground.
         this.camBlend = Math.min(1, this.camBlend + dt * 1.5);
@@ -767,6 +784,8 @@ export class SurfaceGame {
 
         this.spawning(dt);
         this.hails();
+        this.chats(dt);
+        this.overhear(dt);
     }
 
     private pushOut(p: THREE.Vector3) {
@@ -803,6 +822,160 @@ export class SurfaceGame {
             this.startWalking();
             this.ctx.toast('Робот восстановлен ремонтным отсеком корабля (−100 очков)');
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The rover.
+    // -----------------------------------------------------------------------
+
+    private vehicle: Vehicle | null = null;
+    private carState: 'coming' | 'parked' | 'driving' = 'parked';
+    private carWay: THREE.Vector3[] = [];
+    private driving = false;
+    private lookedAt = -9;
+
+    /** Call the rover out of the hold: it drives down the ramp and over to the robot. */
+    summon() {
+        if (this.mode !== 'walk' || this.driving) return;
+        if (!this.vehicle) {
+            this.vehicle = new Vehicle(progress.data.look);
+            this.ctx.scene.add(this.vehicle.root);
+        }
+        const v = this.vehicle;
+        const back = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.shipYaw);
+        if (this.carState !== 'parked' || v.pos.distanceTo(this.robotPos) > 250 || v.pos.lengthSq() === 0) {
+            // Out of the hold: from inside, down the ramp.
+            const inside = this.shipPoint(HINGE.clone().add(new THREE.Vector3(0, 0, -3)));
+            v.place(inside.setY(inside.y + 0.5), this.shipYaw + Math.PI);
+        }
+        const foot = this.rampEnd().addScaledVector(back, 6);
+        this.carWay = v.pos.distanceTo(this.shipPos) < 20 ? [foot, this.robotPos.clone()] : [this.robotPos.clone()];
+        this.carState = 'coming';
+        this.ctx.toast('🚙 Вездеход выезжает из трюма…');
+    }
+
+    /** The ground the rover rolls on: the terrain, or the ramp and the hold floor under the ship. */
+    private carGround = (x: number, z: number): number => {
+        const g = this.ctx.groundAt(x, z);
+        if (!this.ship) return g;
+        const local = new THREE.Vector3(x - this.shipPos.x, 0, z - this.shipPos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.shipYaw);
+        if (Math.abs(local.x) > 1.4) return g;
+        const a = this.rampAngle * THREE.MathUtils.smoothstep(this.rampOpen, 0, 1);
+        const floor = this.shipPos.y + HINGE.y;
+        if (local.z < HINGE.z && local.z > HINGE.z - 5) return Math.max(g, floor);
+        const along = local.z - HINGE.z;
+        if (along >= 0 && along <= RAMP_LEN * Math.cos(a)) return Math.max(g, floor - along * Math.tan(a));
+        return g;
+    };
+
+    private carBlocked = (x: number, z: number): boolean => {
+        if (this.ctx.sea !== null && this.ctx.groundAt(x, z) < this.ctx.sea - 0.8) return true;
+        if (this.ship) for (const f of FEET) { const w = this.shipPoint(f); if (Math.hypot(w.x - x, w.z - z) < 1.6) return true; }
+        const o = this.ctx.obstacle(x, z);
+        return !!o && Math.hypot(o.x - x, o.z - z) < o.r + 0.3;
+    };
+
+    /** What the robot stands on: the ground, or the lowered ramp (a solid plate, not a picture). */
+    private standAt(x: number, z: number): number {
+        const g = this.ctx.groundAt(x, z);
+        if (!this.ship || this.rampOpen < 0.5) return g;
+        const local = new THREE.Vector3(x - this.shipPos.x, 0, z - this.shipPos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.shipYaw);
+        if (Math.abs(local.x) > 1.3) return g;
+        const a = this.rampAngle * THREE.MathUtils.smoothstep(this.rampOpen, 0, 1);
+        const along = local.z - HINGE.z;
+        if (along < 0 || along > RAMP_LEN * Math.cos(a)) return g;
+        return Math.max(g, this.shipPos.y + HINGE.y + 0.1 - along * Math.tan(a));
+    }
+
+    /** Inside the ship's hull (beyond the top of the ramp, or into the belly from the ramp). */
+    private inHull(x: number, z: number, y: number): boolean {
+        if (!this.ship) return false;
+        const local = new THREE.Vector3(x - this.shipPos.x, 0, z - this.shipPos.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), -this.shipYaw);
+        const bellyY = this.shipPos.y - 4.2;
+        // Only a robot high enough to reach the hull can bump into it; under the belly there is room.
+        if (y + 1.9 < bellyY) return false;
+        return Math.abs(local.x) < 4.5 && local.z > -24 && local.z < HINGE.z + 0.6;
+    }
+
+    /** Coming over, or parked and waiting. */
+    private carIdle(dt: number) {
+        const v = this.vehicle!;
+        const g = Math.max(this.ctx.gravity, 0.5);
+        if (this.carState === 'coming') {
+            // The last leg ends beside the robot, not on top of it.
+            if (this.carWay.length <= 1) {
+                const off = v.pos.clone().sub(this.robotPos).setY(0);
+                this.carWay[0] = this.robotPos.clone().add(off.lengthSq() > 1e-4 ? off.setLength(3) : new THREE.Vector3(3, 0, 0));
+            }
+            const to = this.carWay[0];
+            if (v.autoDrive(dt, to, this.carGround, this.carBlocked, g)) {
+                this.carWay.shift();
+                if (!this.carWay.length) { this.carState = 'parked'; this.ctx.toast('🚙 Вездеход подъехал. E — сесть'); }
+            }
+        } else {
+            v.update(dt, { throttle: 0, steer: 0, brake: true, boost: false }, this.carGround, this.carBlocked, g);
+        }
+        v.lampOn = (1 - this.sunShare) * 60;
+    }
+
+    private getIn() {
+        const v = this.vehicle!;
+        this.driving = true;
+        this.carState = 'driving';
+        this.camYaw = v.yaw;
+        this.ctx.toast('За рулём: W/S — газ и задний ход, A/D — руль, Пробел — тормоз, Shift — ускорение, E — выйти');
+    }
+
+    private getOut() {
+        const v = this.vehicle!;
+        this.driving = false;
+        this.carState = 'parked';
+        const left = new THREE.Vector3(-Math.cos(v.yaw), 0, Math.sin(v.yaw));
+        const p = v.pos.clone().addScaledVector(left, 2.2);
+        this.robotPos.set(p.x, this.ctx.groundAt(p.x, p.z), p.z);
+        this.robotVel.set(0, 0, 0);
+        this.robotYaw = v.yaw;
+    }
+
+    private stowCar() {
+        if (!this.vehicle) return;
+        this.driving = false;
+        this.ctx.scene.remove(this.vehicle.root);
+        this.vehicle.dispose();
+        this.vehicle = null;
+        this.carState = 'parked';
+    }
+
+    private drive(dt: number, camera: THREE.PerspectiveCamera) {
+        const v = this.vehicle!;
+        const held = (c: string) => this.keys.has(c) || virtualKeys.has(c);
+        const blocked = this.blocked;
+        const throttle = blocked ? 0 : (held('KeyW') || held('ArrowUp') ? 1 : 0) - (held('KeyS') || held('ArrowDown') ? 1 : 0);
+        const steer = blocked ? 0 : (held('KeyD') || held('ArrowRight') ? 1 : 0) - (held('KeyA') || held('ArrowLeft') ? 1 : 0);
+        this.jumpQueued = false;
+        v.update(dt, { throttle, steer, brake: held('Space'), boost: held('ShiftLeft') || held('ShiftRight') }, this.carGround, this.carBlocked, Math.max(this.ctx.gravity, 0.5));
+        v.lampOn = (1 - this.sunShare) * 60;
+        this.robotPos.copy(v.seatWorld());
+        this.robotYaw = v.yaw;
+        this.robot.update(dt, { speed: 0, grounded: true, jets: false, aiming: false, aimPitch: 0, gravity: this.ctx.gravity, seated: true, steer });
+        if (Math.abs(v.speed) > 6 && Math.random() < dt * 20) {
+            const back = v.pos.clone().addScaledVector(v.forward, -1.6);
+            this.particles.emit(back.setY(this.ctx.groundAt(back.x, back.z) + 0.2), v.forward.multiplyScalar(-v.speed * 0.1).setY(1 + Math.random()), this.ctx.dustColor, 0.8 + Math.random() * 0.6, 1.4, 0.1);
+        }
+        // Chase camera: swings behind the car unless the pilot has just looked round with the mouse.
+        if (this.time - this.lookedAt > 1.5) this.camYaw += wrap(v.yaw - this.camYaw) * (1 - Math.exp(-2.5 * dt));
+        const dir = new THREE.Vector3(-Math.sin(this.camYaw) * Math.cos(this.camPitch), Math.sin(this.camPitch), -Math.cos(this.camYaw) * Math.cos(this.camPitch));
+        const target = v.pos.clone().add(new THREE.Vector3(0, 1.4, 0));
+        const eye = target.clone().addScaledVector(dir, -Math.max(this.camDist, 5) * 1.5).add(new THREE.Vector3(0, 1.2, 0));
+        eye.y = Math.max(eye.y, this.ctx.groundAt(eye.x, eye.z) + 0.8);
+        camera.position.lerp(eye, 1 - Math.exp(-10 * dt));
+        camera.lookAt(target.addScaledVector(dir, 8));
+        this.sinceHit += dt;
+        if (this.sinceHit > 3) pilotState.shield = Math.min(pilotState.maxShield, pilotState.shield + effects.regen * dt);
+        this.spawning(dt);
+        this.hails();
+        this.chats(dt);
+        this.overhear(dt);
     }
 
     // -----------------------------------------------------------------------
@@ -863,6 +1036,7 @@ export class SurfaceGame {
         this.robot.flinch();
         this.ctx.game.flashHit();
         if (pilotState.hull <= 0) {
+            if (this.driving) this.getOut();
             this.mode = 'dead';
             this.deadFor = 0;
             if (document.pointerLockElement) document.exitPointerLock();
@@ -1131,11 +1305,80 @@ export class SurfaceGame {
             const start = new THREE.Vector2(home.x + (home.x - this.shipPos.x) * 1.6, home.y + (home.y - this.shipPos.z) * 1.6);
             const sg = this.ctx.groundAt(start.x, start.y);
             const from = this.ctx.sea !== null && sg < this.ctx.sea + 0.5 ? home.clone() : start;
+            // Its building site, a little to the side of where it lives.
+            const side = new THREE.Vector2(home.x - this.shipPos.x, home.y - this.shipPos.z).normalize();
+            const siteAt = new THREE.Vector2(home.x - side.y * 9 + side.x * 6, home.y + side.x * 9 + side.y * 6);
+            const siteG = this.ctx.groundAt(siteAt.x, siteAt.y);
+            let build: Being['build'] = null;
+            if (this.ctx.sea === null || siteG > this.ctx.sea + 0.5) {
+                const s = makeStructure(spec.kind, spec.color);
+                const key = `${this.ctx.planet}:${spec.kind}`;
+                s.group.position.set(siteAt.x, siteG - 0.05, siteAt.y);
+                s.group.rotation.y = rng() * Math.PI * 2;
+                this.ctx.scene.add(s.group);
+                build = { s, at: siteAt, key, progress: progress.data.builds?.[key] ?? 0.08 };
+                this.showStages(build);
+            }
             this.beings.push({
                 spec, rig, pos: new THREE.Vector3(from.x, this.ctx.groundAt(from.x, from.y), from.y), yaw: 0, home, target: home.clone(),
                 state: 'walk', timer: 0, phase: rng() * 10, hailed: false, shadow: this.makeShadow(rig.radius),
+                build, chatWith: null, toSite: false,
             });
         });
+    }
+
+    private chatIn = 15;
+
+    /** Now and then two of them meet halfway and have a chat. */
+    private chats(dt: number) {
+        this.chatIn -= dt;
+        if (this.chatIn > 0) return;
+        this.chatIn = 20 + Math.random() * 25;
+        const free = this.beings.filter(b => b.state === 'work' && !b.chatWith && b.pos.distanceTo(this.robotPos) > 6);
+        if (free.length < 2) return;
+        const a = free[Math.floor(Math.random() * free.length)];
+        const b = free.filter(x => x !== a).sort((x, y) => x.pos.distanceTo(a.pos) - y.pos.distanceTo(a.pos))[0];
+        if (!b || a.pos.distanceTo(b.pos) > 60) return;
+        const mid = new THREE.Vector2((a.pos.x + b.pos.x) / 2, (a.pos.z + b.pos.z) / 2);
+        const dir = new THREE.Vector2(a.pos.x - b.pos.x, a.pos.z - b.pos.z).normalize().multiplyScalar(1.1);
+        for (const [x, other, s] of [[a, b, 1], [b, a, -1]] as const) {
+            x.chatWith = other;
+            x.toSite = false;
+            x.target = mid.clone().addScaledVector(dir, s);
+            x.state = 'walk';
+        }
+        const line = CHATTER[Math.floor(Math.random() * CHATTER.length)];
+        this.pendingChat = { a, b, line, shown: 0 };
+    }
+    private pendingChat: { a: Being; b: Being; line: string[]; shown: number } | null = null;
+
+    /** Overheard, if the robot is near enough. */
+    private overhear(dt: number) {
+        const c = this.pendingChat;
+        if (!c) return;
+        if (c.a.state !== 'chat' || c.b.state !== 'chat') { if (c.a.state === 'work' && c.b.state === 'work' && c.shown > 0) this.pendingChat = null; return; }
+        c.shown += dt;
+        const near = Math.min(c.a.pos.distanceTo(this.robotPos), c.b.pos.distanceTo(this.robotPos)) < 30;
+        if (!near || this.dialog.open) return;
+        if (c.shown < dt * 1.5) this.ctx.toast(`${c.a.spec.emoji} ${c.a.spec.name.split(' ').pop()}: «${c.line[0]}»`);
+        else if (c.shown >= 4 && c.shown - dt < 4) this.ctx.toast(`${c.b.spec.emoji} ${c.b.spec.name.split(' ').pop()}: «${c.line[1]}»`);
+    }
+
+    /** Talking with the hands (or the lights). */
+    private gesture(b: Being) {
+        const p = b.rig.parts, t = this.time + b.phase;
+        if (p.armR && b.spec.kind !== 'golem') { p.armR.rotation.x = -0.6 + Math.sin(t * 3) * 0.35; p.armR.rotation.z = Math.sin(t * 2) * 0.2; }
+        if (p.head) p.head.rotation.x = Math.sin(t * 2.3) * 0.12;
+        if (p.orbit) p.orbit.rotation.y = t * 4;
+        if (b.spec.kind === 'crawler') p.body.rotation.x = Math.sin(t * 4) * 0.08;
+        if (b.spec.kind === 'rover') p.cam.rotation.y = Math.sin(t * 1.5) * 0.4;
+    }
+
+    private showStages(build: NonNullable<Being['build']>) {
+        const n = build.s.stages.length;
+        const shown = Math.ceil(build.progress * n);
+        build.s.stages.forEach((o, i) => { o.visible = i < shown; });
+        build.s.scaffold.visible = build.progress < 1;
     }
 
     private hails() {
@@ -1163,28 +1406,64 @@ export class SurfaceGame {
                 if (b.state === 'walk' && b.target) {
                     const to = new THREE.Vector2(b.target.x - b.pos.x, b.target.y - b.pos.z);
                     const dist = to.length();
-                    if (dist < 0.8) { b.state = 'work'; b.timer = 6 + Math.random() * 8; }
-                    else {
+                    if (dist < (b.chatWith ? 1.6 : 0.8)) {
+                        if (b.chatWith) { b.state = 'chat'; b.timer = 12; }
+                        else { b.state = 'work'; b.timer = b.toSite ? 14 + Math.random() * 10 : 6 + Math.random() * 8; }
+                    } else {
                         to.normalize();
                         const step = Math.min(dist, b.spec.speed * dt);
                         const nx = b.pos.x + to.x * step, nz = b.pos.z + to.y * step;
                         if (this.ctx.sea === null || this.ctx.groundAt(nx, nz) > this.ctx.sea + 0.3) { b.pos.x = nx; b.pos.z = nz; moving = true; }
-                        else b.target = null;
+                        else { b.target = null; b.chatWith = null; }
                         const want = Math.atan2(-to.x, -to.y);
                         b.yaw += wrap(want - b.yaw) * (1 - Math.exp(-5 * dt));
                     }
+                } else if (b.state === 'chat') {
+                    // Face the other one and talk; an overheard line now and then.
+                    const o = b.chatWith;
+                    if (o) {
+                        const want = Math.atan2(-(o.pos.x - b.pos.x), -(o.pos.z - b.pos.z));
+                        b.yaw += wrap(want - b.yaw) * (1 - Math.exp(-4 * dt));
+                    }
+                    b.timer -= dt;
+                    if (b.timer <= 0 || !o || (o.state !== 'chat' && o.state !== 'walk')) { b.chatWith = null; b.state = 'work'; b.timer = 2; }
                 } else if (b.state === 'work') {
                     b.timer -= dt;
+                    // Building: the work goes on while it stands at the site.
+                    if (b.toSite && b.build && b.build.progress < 1) {
+                        const was = b.build.progress;
+                        b.build.progress = Math.min(1, was + dt / 160);
+                        this.showStages(b.build);
+                        if (Math.random() < dt * 6) {
+                            const p = new THREE.Vector3(b.build.at.x + (Math.random() - 0.5) * 6, 0, b.build.at.y + (Math.random() - 0.5) * 6);
+                            p.y = this.ctx.groundAt(p.x, p.z) + Math.random() * 3;
+                            this.sparks.emit(p, new THREE.Vector3((Math.random() - 0.5) * 2, 1 + Math.random() * 2, (Math.random() - 0.5) * 2), new THREE.Color(3, 2.2, 0.8), 0.1, 0.5, 1);
+                        }
+                        if (b.build.progress >= 1) {
+                            b.build.s.scaffold.visible = false;
+                            if (b.pos.distanceTo(this.robotPos) < 80) this.ctx.toast(`${b.spec.emoji} ${b.spec.name} достраивает ${b.build.s.name}!`);
+                        }
+                        (progress.data.builds ??= {})[b.build.key] = b.build.progress;
+                    }
                     if (b.timer <= 0) {
-                        const a = Math.random() * Math.PI * 2, r = 4 + Math.random() * 16;
-                        b.target = new THREE.Vector2(b.home.x + Math.cos(a) * r, b.home.y + Math.sin(a) * r);
+                        b.toSite = false;
+                        if (b.build && b.build.progress < 1 && Math.random() < 0.6) {
+                            // Back to the building site.
+                            const a = Math.random() * Math.PI * 2;
+                            b.target = new THREE.Vector2(b.build.at.x + Math.cos(a) * 5.5, b.build.at.y + Math.sin(a) * 5.5);
+                            b.toSite = true;
+                        } else {
+                            const a = Math.random() * Math.PI * 2, r = 4 + Math.random() * 16;
+                            b.target = new THREE.Vector2(b.home.x + Math.cos(a) * r, b.home.y + Math.sin(a) * r);
+                        }
                         b.state = 'walk';
                     }
                 } else { b.state = 'work'; b.timer = 3; }
             }
             b.pos.y = this.ctx.groundAt(b.pos.x, b.pos.z);
             b.phase += dt * (moving ? b.spec.speed * 3.2 : 1);
-            this.animateBeing(b, moving, b.state === 'work');
+            this.animateBeing(b, moving, b.state === 'work' && !b.toSite ? true : b.state === 'work');
+            if (b.state === 'chat') this.gesture(b);
             b.rig.root.position.copy(b.pos);
             b.rig.root.rotation.y = b.yaw;
             this.placeShadow(b.shadow, b.pos.x, b.pos.z, 0);
@@ -1340,7 +1619,9 @@ export class SurfaceGame {
         let prompt = '';
         if (walking && !this.dialog.open) {
             const b = this.nearestBeing();
-            if (b) prompt = `E — поговорить: ${b.spec.emoji} ${b.spec.name} · ${b.spec.species.split(',')[0]}`;
+            if (this.driving) prompt = 'E — выйти из вездехода';
+            else if (this.vehicle && this.carState === 'parked' && this.vehicle.pos.distanceTo(this.robotPos) < 4.5) prompt = 'E — сесть в вездеход';
+            else if (b) prompt = `E — поговорить: ${b.spec.emoji} ${b.spec.name} · ${b.spec.species.split(',')[0]}`;
             else if (this.robotPos.distanceTo(this.rampEnd()) < BOARD_M) prompt = 'F — подняться на борт и взлететь';
             else if (document.pointerLockElement !== this.ctx.canvas && this.time - this.walkSince < 12) prompt = 'Клик по сцене — захватить мышь для обзора и стрельбы';
         } else if (this.mode === 'dead') prompt = 'Робот разрушен — ремонтный отсек восстанавливает его…';
@@ -1353,6 +1634,8 @@ export class SurfaceGame {
         const list: Action[] = [];
         const b = this.nearestBeing();
         if (b) list.push({ label: `💬 ${b.spec.name} (E)`, title: b.spec.species, run: () => this.talk(b) });
+        if (this.driving) list.push({ label: '🚶 Выйти (E)', run: () => this.getOut() });
+        else list.push({ label: '🚙 Вездеход (G)', title: 'Вызвать вездеход из трюма корабля', run: () => this.summon() });
         list.push({ label: '🚀 На борт (F)', title: 'Вернуться к кораблю и взлететь', run: () => this.board() });
         return list;
     }
@@ -1362,6 +1645,7 @@ export class SurfaceGame {
         if (this.mode === 'boarding') return 'Робот поднимается на борт…';
         if (this.mode === 'dead') return 'Робот разрушен';
         const toShip = Math.round(this.robotPos.distanceTo(this.shipPos));
+        if (this.driving && this.vehicle) return `За рулём вездехода · ${Math.abs(this.vehicle.speed * 3.6).toFixed(0)} км/ч · до корабля ${toShip} м`;
         const hs = Math.hypot(this.robotVel.x, this.robotVel.z);
         const g = this.ctx.gravity;
         const note = g < 0.5 ? ' (гравизахваты)' : g < 3 ? ' — низкая гравитация, прыжки высокие' : '';
@@ -1391,7 +1675,12 @@ export class SurfaceGame {
     }
 
     private clearBeings() {
-        for (const b of this.beings) { this.ctx.scene.remove(b.rig.root, b.shadow); this.disposeTree(b.rig.root); }
+        for (const b of this.beings) {
+            this.ctx.scene.remove(b.rig.root, b.shadow);
+            this.disposeTree(b.rig.root);
+            if (b.build) { this.ctx.scene.remove(b.build.s.group); this.disposeTree(b.build.s.group); }
+        }
+        this.pendingChat = null;
         this.beings = [];
     }
 
@@ -1412,6 +1701,7 @@ export class SurfaceGame {
     }
 
     dispose() {
+        this.stowCar();
         this.clearLife();
         if (this.ship) { this.ctx.scene.remove(this.ship); this.disposeTree(this.ship); }
         this.ctx.scene.remove(this.robot.root);

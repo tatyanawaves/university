@@ -653,7 +653,12 @@ export class StarSystemLevel implements Level {
         const rng = mulberry32((this.system?.seed ?? 0x50da) ^ this.galaxy.seed ^ 0x9071a1);
         const planets = this.bodies.filter(b => b.parent?.kind === 'star').map(b => b.name);
         if (!planets.length) return [];
+        // Each portal by its own world where there are enough of them; with few worlds, several share
+        // one but stand a quarter-turn apart (at(i) and angleOf(i)), so flying to one never passes through another.
+        const slots = [this.system ? 0 : 2, this.system ? 1 : 4, this.system ? 2 : 3, planets.length - 1];
+        const crowded = new Set(slots.map(i => Math.min(planets.length - 1, i))).size < slots.length;
         const at = (i: number) => planets[Math.min(planets.length - 1, i)];
+        const angleOf = (k: number, own: number) => (crowded ? k * (Math.PI / 2) + 0.3 : own);
         const web: LevelRequest = { kind: 'web' };
         const inGalaxy = (g: GalaxySpec, last: LevelRequest): LevelRequest[] => [web, { kind: 'galaxy', galaxy: g }, last];
         const specs: PortalSpec[] = [];
@@ -663,7 +668,7 @@ export class StarSystemLevel implements Level {
         const k = Math.floor(rng() * GALAXY_STARS);
         const starHere = starName(hash32(this.galaxy.seed, k));
         specs.push({
-            title: `Система ${starHere} · ${this.galaxy.name}`, near: at(this.system ? 0 : 2), distRadii: 7, angle: 0.9, color: 0x44e0ff,
+            title: `Система ${starHere} · ${this.galaxy.name}`, near: at(slots[0]), distRadii: 7, angle: angleOf(0, 0.9), color: 0x44e0ff,
             go: () => this.warp(`система ${starHere}`, () => inGalaxy(this.galaxy, { kind: 'system', galaxy: this.galaxy, star: galaxyStar(this.galaxy, k) })),
         });
         let gk = Math.floor(rng() * WEB_GALAXIES);
@@ -671,7 +676,7 @@ export class StarSystemLevel implements Level {
         const gName = `PGC ${(100_000 + (hash32(gk, 0x9a1a) % 900_000)).toString()}`;
         const sk = Math.floor(rng() * GALAXY_STARS);
         specs.push({
-            title: `Галактика ${gName}`, near: at(this.system ? 1 : 4), distRadii: 4, angle: -0.7, color: 0xc070ff,
+            title: `Галактика ${gName}`, near: at(slots[1]), distRadii: crowded ? 7 : 4, angle: angleOf(1, -0.7), color: 0xc070ff,
             go: () => this.warp(`галактика ${gName}`, () => {
                 const g2 = webGalaxy(gk);
                 return inGalaxy(g2, { kind: 'system', galaxy: g2, star: galaxyStar(g2, sk) });
@@ -679,17 +684,17 @@ export class StarSystemLevel implements Level {
         });
         const bh = this.galaxy.isMilkyWay ? 'Стрелец A*' : `ядро ${this.galaxy.name}`;
         specs.push({
-            title: `Чёрная дыра: ${bh}`, near: at(this.system ? 2 : 3), distRadii: 8, angle: 2.2, color: 0xff7a30,
+            title: `Чёрная дыра: ${bh}`, near: at(slots[2]), distRadii: crowded ? 7 : 8, angle: angleOf(2, 2.2), color: 0xff7a30,
             go: () => this.warp(`чёрная дыра ${bh}`, inGalaxy(this.galaxy, { kind: 'blackhole', galaxy: this.galaxy })),
         });
         if (this.system) {
             specs.push({
-                title: 'Солнечная система · Млечный Путь', near: at(planets.length - 1), distRadii: 6, angle: 0.4, color: 0xffd166,
+                title: 'Солнечная система · Млечный Путь', near: at(slots[3]), distRadii: crowded ? 7 : 6, angle: angleOf(3, 0.4), color: 0xffd166,
                 go: () => this.warp('Солнечная система', inGalaxy(MILKY_WAY, { kind: 'system', galaxy: MILKY_WAY, star: 'sun' })),
             });
         } else {
             specs.push({
-                title: 'Вся Вселенная — космическая паутина', near: at(planets.length - 1), distRadii: 6, angle: 0.4, color: 0xffd166,
+                title: 'Вся Вселенная — космическая паутина', near: at(slots[3]), distRadii: crowded ? 7 : 6, angle: angleOf(3, 0.4), color: 0xffd166,
                 go: () => this.warp('космическая паутина', [web]),
             });
         }
@@ -941,7 +946,9 @@ export class StarSystemLevel implements Level {
         this.labels.update(this.camera, this.width, this.height);
         const byName = (n: string) => this.bodies.find(b => b.name === n);
         this.satellites.update(this.realTime, byName, this.camera, this.width, this.height);
-        this.portals.update(this.realTime, this.pilot.position, byName, star.pos, this.camera, this.width, this.height);
+        // On the autopilot to a portal, only that one opens: the path may graze the others.
+        const aimed = this.nav?.through ? this.nav.name : null;
+        this.portals.update(this.realTime, this.pilot.position, byName, star.pos, this.camera, this.width, this.height, aimed);
     }
 
     /**

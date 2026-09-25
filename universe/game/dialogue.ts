@@ -183,6 +183,7 @@ function memoryPrompt(mem?: CreatureMemory): string[] {
         `Вы уже встречались: это ваш ${mem.talks}-й разговор. Твоё отношение к пилоту: ${moodText(mem.mood)}.`,
         mem.said.length ? `Раньше пилот говорил тебе: ${mem.said.slice(-4).map(x => `«${x}»`).join(', ')}.` : '',
         errands.length ? `Твои поручения ему: ${errands.join('; ')}.` : '',
+        mem.told?.length ? `Ты уже рассказывала(рассказывал) ему: ${mem.told.slice(-5).map(x => `«${x.slice(0, 80)}»`).join(', ')} — не повторяйся, расскажи новое.` : '',
         'Начни с того, что узнаёшь пилота и вспоминаешь прошлое (поблагодари за выполненное, упрекни за проваленное или грубость).',
     ];
 }
@@ -225,7 +226,7 @@ function systemPrompt(mind: CreatureMind, world: WorldBrief, forceQuest: boolean
         ...kinds,
         'Отвечай ТОЛЬКО объектом JSON, без markdown и пояснений:',
         '{"line": "твоя реплика", "options": ["ответ 1", "ответ 2", "ответ 3", "ответ 4"], "quest": null}',
-        'options — четыре коротких (до 12 слов) разных по тону ответа пилота: дружелюбный, деловой, дерзкий, любопытный.',
+        'options — четыре коротких (до 12 слов) разных по тону ответа пилота: дружелюбный, деловой, дерзкий, любопытный, именно в этом порядке; каждый раз новые, по смыслу твоей реплики, без шаблонов.',
         `Когда даёшь поручение, вместо null укажи: "quest": {"title": "…", "brief": "что и зачем сделать", "type": ${surface ? '"kill", "collect" или "reach"' : '"kill" или "reach"'}, "enemy": "…", "count": число, "body": "…", "reward": число 100–1500}`,
     ].join('\n');
 }
@@ -272,20 +273,76 @@ async function callModel(a: ModelAccess, system: string, history: { role: 'user'
 // The scripted conversation.
 // ---------------------------------------------------------------------------
 
-/** The pilot's replies at each step of the scripted talk: friendly, business-like, rude, curious. */
-const STEP_REPLIES = [
-    ['Рад встрече! Я пилот, лечу мимо.', 'Мне сказали, тут есть работа.', 'Прочь с дороги, чудище.', 'Кто ты такое?'],
-    ['Как красиво ты говоришь. Продолжай.', 'Интересно, но ближе к делу.', 'Мне некогда слушать сказки.', 'Расскажи ещё — как ты здесь живёшь?'],
-    ['Я исследую Вселенную — хочу увидеть всё.', 'Я наёмный пилот, работаю за награду.', 'Не твоё дело, куда я лечу.', 'А почему ты спрашиваешь?'],
-    ['Слухи? Люблю слухи, рассказывай.', 'Слухи меня не кормят.', 'Враньё это всё.', 'А кто ещё живёт в этой системе?'],
-    ['Я помогу. Что нужно сделать?', 'Какая награда?', 'С чего бы мне рисковать ради тебя?', 'Кто эти враги и откуда они?'],
+/**
+ * The pilot's replies, generated afresh for every turn: for each step of the talk, a pool of
+ * lines per tone — friendly, business-like, rude, curious (always in that order, which is how the
+ * creature reads the tone). {n} is the creature's name, {h} where it lives.
+ */
+const REPLY_POOLS: string[][][] = [
+    [
+        ['Рад встрече! Я пилот, лечу мимо.', 'Привет, {n}! Какая встреча.', 'Здравствуй! Мне говорили, у {h} живут удивительные существа.', 'Мир тебе. Я с миром.', 'Приятно познакомиться, {n}.'],
+        ['Мне сказали, тут есть работа.', 'Я по делу. Найдётся заказ?', 'Коротко: мне нужны кредиты.', 'Пилот на свободном контракте. Слушаю.', 'Времени мало — что у тебя?'],
+        ['Прочь с дороги, чудище.', 'Ещё один болтун на моём пути.', 'Не мешай, я занят.', 'Ты кто такой, чтобы меня останавливать?', 'Говори быстро, мне некогда.'],
+        ['Кто ты такое?', 'Ого! А ты вообще живой?', 'Как тебя сюда занесло?', 'Никогда не видел таких, как ты. Расскажешь?', 'Ты здесь один(одна)?'],
+    ],
+    [
+        ['Как красиво ты говоришь. Продолжай.', 'Удивительно! Никогда такого не слышал.', 'Спасибо, что делишься этим.', 'Мне нравится тебя слушать.', 'Это трогательно.'],
+        ['Интересно, но ближе к делу.', 'Понятно. А что сейчас важнее всего?', 'Любопытно. Перейдём к сути?', 'Запомню. Что дальше?', 'Хорошо. И к чему ты ведёшь?'],
+        ['Мне некогда слушать сказки.', 'Скучно.', 'Сочиняешь на ходу?', 'И зачем мне это знать?', 'Ну и что?'],
+        ['Расскажи ещё — как ты здесь живёшь?', 'А что было дальше?', 'Как давно это было?', 'А другие такие же, как ты, есть?', 'Что ты ешь? Чем дышишь?'],
+    ],
+    [
+        ['Я исследую Вселенную — хочу увидеть всё.', 'Ищу место, которое назову домом.', 'Лечу, потому что не могу иначе.', 'Меня ждут дома, но я обещал(а) вернуться с историями.', 'Хочу найти друзей среди звёзд.'],
+        ['Я наёмный пилот, работаю за награду.', 'Коплю на новый двигатель.', 'Выполняю контракты, вот и всё.', 'Разведка и доставка — моя работа.', 'Плачу долги, беру заказы.'],
+        ['Не твоё дело, куда я лечу.', 'Много будешь знать — скоро состаришься.', 'Отстань с вопросами.', 'Это секрет.', 'Сначала ты ответь.'],
+        ['А почему ты спрашиваешь?', 'А ты сам(а) о чём мечтаешь?', 'Трудный вопрос. А у тебя есть ответ?', 'Хочешь, расскажу про Землю?', 'Интересно, что ты об этом думаешь?'],
+    ],
+    [
+        ['Слухи? Люблю слухи, рассказывай.', 'Спасибо, что предупредил(а).', 'Буду осторожен(на). Что ещё слышно?', 'Ты много знаешь. Это ценно.', 'Звучит тревожно. Могу помочь?'],
+        ['Слухи меня не кормят.', 'А за эту информацию платят?', 'Где именно это было?', 'Сколько их там?', 'Откуда эти сведения?'],
+        ['Враньё это всё.', 'Сплетни.', 'Меня этим не напугать.', 'Я и не таких видел.', 'Сказки для новичков.'],
+        ['А кто ещё живёт в этой системе?', 'А сам(а) ты это видел(а)?', 'Что там на самом деле?', 'Почему никто не разобрался?', 'А раньше такое бывало?'],
+    ],
+    [
+        ['Я помогу. Что нужно сделать?', 'Для тебя — всё что угодно.', 'Не переживай, справлюсь.', 'Можешь на меня рассчитывать.', 'Скажи, чем помочь.'],
+        ['Какая награда?', 'Сколько заплатишь?', 'Условия?', 'Что я получу взамен?', 'Сроки и оплата?'],
+        ['С чего бы мне рисковать ради тебя?', 'Сам(а) разбирайся.', 'Не моя проблема.', 'Может, и помогу. Если захочу.', 'Опять кому-то что-то нужно.'],
+        ['Кто эти враги и откуда они?', 'Почему именно я?', 'А что будет, если не помочь?', 'Давно это началось?', 'Кто ещё знает об этом?'],
+    ],
 ];
 
+/** How the creature takes each tone, several ways each. */
 const REACTIONS = [
-    ['Твой голос тёплый, как свет близкой звезды.', 'Ты добр, пилот. Это редкость между орбитами.'],
-    ['Деловой… Хорошо, у меня тоже мало времени.', 'Прямо к сути — уважаю.'],
-    ['Дерзость — роскошь для того, кто летает в консервной банке.', 'Грубиян. Но смелый грубиян.'],
-    ['Любопытство — лучшее, что есть в вас, двуногих.', 'Ты задаёшь хорошие вопросы.'],
+    ['Твой голос тёплый, как свет близкой звезды.', 'Ты добр, пилот. Это редкость между орбитами.', 'Как приятно слышать доброе слово.', 'Ты мне нравишься, пилот.', 'С тобой легко говорить.', 'Твоя вежливость согревает.'],
+    ['Деловой… Хорошо, у меня тоже мало времени.', 'Прямо к сути — уважаю.', 'Сразу видно профессионала.', 'Понимаю, дела прежде всего.', 'Ладно, без лишних слов.'],
+    ['Дерзость — роскошь для того, кто летает в консервной банке.', 'Грубиян. Но смелый грубиян.', 'Хм. Не очень-то вежливо.', 'Ты всегда такой колючий?', 'Я прощу — на первый раз.', 'Острый язык, пилот.'],
+    ['Любопытство — лучшее, что есть в вас, двуногих.', 'Ты задаёшь хорошие вопросы.', 'О, тебе правда интересно!', 'Любознательность — это прекрасно.', 'Какой любопытный гость!'],
+];
+
+/** Stories any creature may tell once its own are used up. */
+const STORIES = [
+    'Однажды мимо пролетал корабль, весь в огнях, как праздник. Он даже не притормозил. Ты — первый, кто остановился.',
+    'Я видел(а), как звезда на миг погасла — что-то большое прошло перед ней. Не планета. Что-то живое.',
+    'Здесь время течёт иначе: день длиннее, ночь тише. Я научился(ась) слушать тишину.',
+    'Когда-то я пыталась(пытался) сосчитать все звёзды на небе. На третьем миллионе сбилась(сбился) и начала(начал) заново.',
+    'У меня был друг, похожий на тебя — тоже всё время куда-то спешил. Однажды улетел и не вернулся.',
+    'Самое красивое здесь — рассвет. Свет сначала синий, потом золотой, потом обычный. Жаль, это всего минута.',
+    'Мне снится один и тот же сон: огромный город из стекла, и в каждом окне — чья-то жизнь.',
+    'Здесь бывают бури, от которых дрожит сама земля. Мы прячемся и ждём, пока утихнет.',
+    'Я храню камешек с другой планеты. Не знаю, откуда он. Просто однажды он упал с неба прямо мне в руки.',
+    'Иногда ночью над горизонтом пролетают огни. Не корабли — они движутся слишком странно.',
+];
+
+/** Questions any creature may ask, besides its own. */
+const QUESTIONS = [
+    'А какая у тебя самая красивая планета из виденных?',
+    'Ты когда-нибудь боялся(ась) темноты между звёздами?',
+    'Что ты возьмёшь с собой, если придётся бежать навсегда?',
+    'Правда, что на Земле вода падает прямо с неба?',
+    'У тебя есть имя, или только позывной?',
+    'Ты веришь, что звёзды живые?',
+    'Сколько тебе лет по вашему счёту?',
+    'Чего тебе не хватает в полёте больше всего?',
 ];
 
 /** Gossip any creature may pass on. */
@@ -296,7 +353,32 @@ const RUMORS = [
     'Кристаллиды рождаются из обломков разбитых кораблей. Поэтому их всё больше.',
     'Где-то в поясе астероидов лежит станция без экипажа, и её огни всё ещё мигают.',
     'В центре галактики чёрная дыра хранит память всего, что в неё упало. Так шепчут оракулы.',
+    'Кто-то видел корабль, который летел задом наперёд во времени. Он приземлился вчера — завтра.',
+    'На одной луне нашли следы. Не наши, не ваши. Шесть пальцев, и все босые.',
+    'Говорят, если пролететь сквозь хвост кометы на форсаже, двигатель запоёт.',
+    'Скиттеры собираются в стаи, когда чувствуют железо. А ты весь из железа, дружок.',
+    'Старые маяки на краю системы снова включились. Никто не знает, кто их питает.',
+    'Шагоходы-стражи охраняют что-то под землёй. Что — никто не вернулся рассказать.',
 ];
+
+/** Shuffled but repeatable: a pick from a list for this talk. */
+function choose<T>(list: T[], seed: number, avoid: (x: T) => boolean = () => false): T {
+    const n = list.length;
+    const start = Math.abs(Math.floor(seed * 2654435761)) % n;
+    for (let k = 0; k < n; k++) {
+        const x = list[(start + k * 7) % n];
+        if (!avoid(x)) return x;
+    }
+    return list[start];
+}
+
+const fill = (line: string, mind: CreatureMind) => line.replace(/\{n\}/g, mind.name.split(' ').pop() ?? mind.name).replace(/\{h\}/g, mind.home);
+
+/** Four fresh replies for this step of the talk, one of each tone. */
+export function replyOptions(mind: CreatureMind, step: number, seed: number): string[] {
+    const pools = REPLY_POOLS[Math.min(step, REPLY_POOLS.length - 1)];
+    return pools.map((pool, tone) => fill(choose(pool, seed * 31 + tone * 101 + step * 7), mind));
+}
 
 const pick = <T>(list: T[], seed: number) => list[Math.abs(Math.floor(seed)) % list.length];
 
@@ -328,23 +410,43 @@ export const APOLOGY = 'Прости, я был груб.';
 /** The next turn of the scripted talk, given what was said so far. */
 export function scriptedTurn(mind: CreatureMind, history: Exchange[], memory?: CreatureMemory): DialogueTurn {
     const r = history.length; // the pilot has answered every turn shown so far
-    const last = r ? history[r - 1].reply ?? '' : '';
-    const tone = STEP_REPLIES.map(t => t.indexOf(last)).find(i => i >= 0) ?? -1;
-    const react = tone >= 0 ? pick(REACTIONS[tone], r + mind.name.length) + ' ' : '';
+    // Every talk is its own: the lines and the replies offered depend on how many talks came before.
+    const talkSeed = (memory?.talks ?? 0) * 977 + [...mind.name].reduce((a, c) => a + c.charCodeAt(0), 0);
+    const seed = talkSeed + r * 13;
+    const prev = r ? history[r - 1] : null;
+    const last = prev?.reply ?? '';
+    const tone = prev ? prev.turn.options.indexOf(last) : -1;
+    const react = tone >= 0 && tone < 4 ? choose(REACTIONS[tone], seed) + ' ' : '';
     const said = history.map(h => h.turn.line);
-    const told = (line: string) => said.some(x => x.includes(line));
+    const told = (line: string) => said.some(x => x.includes(line)) || (memory?.told ?? []).includes(line);
     const sc = mind.script;
-    const loreLeft = sc.lore.filter(l => !told(l));
-    const rumor = sc.rumor + ' ' + pick(RUMORS, mind.name.length * 7 + r);
-    if (r === 0) return { line: memory && memory.talks > 1 ? memoryGreeting(memory) : sc.greet, options: STEP_REPLIES[0], quest: null };
+    // Stories not yet told — this talk or any before — come first.
+    const own = sc.lore.filter(l => !told(l));
+    const fresh = own.length ? own : STORIES.filter(l => !told(l));
+    const story = fresh.length ? choose(fresh, seed) : choose(STORIES, seed, l => said.some(x => x.includes(l)));
+    const remember = (line: string) => { if (memory) memory.told = [...(memory.told ?? []), line].slice(-12); };
+    const rumor = sc.rumor + ' ' + choose(RUMORS, seed + 5, x => said.some(l => l.includes(x)) || (memory?.told ?? []).includes(x));
+    const opts = (step: number) => replyOptions(mind, step, seed);
+    if (r === 0) return { line: memory && memory.talks > 1 ? memoryGreeting(memory) : sc.greet, options: opts(0), quest: null };
     // A curious pilot keeps the stories coming (up to the limit).
-    if (tone === 3 && loreLeft.length && r < MAX_REPLIES - 2 && r >= 3) {
-        return { line: react + loreLeft[0], options: STEP_REPLIES[1], quest: null };
+    if (tone === 3 && fresh.length && r < MAX_REPLIES - 2 && r >= 3) {
+        remember(story);
+        return { line: react + story, options: opts(1), quest: null };
     }
-    if (r === 1) return { line: react + (loreLeft[0] ?? sc.lore[0]), options: STEP_REPLIES[1], quest: null };
-    if (r === 2) return { line: react + sc.ask, options: STEP_REPLIES[2], quest: null };
-    if (r === 3) return { line: react + (loreLeft[0] ? loreLeft[0] + ' ' : '') + rumor, options: STEP_REPLIES[3], quest: null };
-    if (!told(sc.trouble) && r < MAX_REPLIES) return { line: react + sc.trouble, options: STEP_REPLIES[4], quest: null };
+    if (r === 1) { remember(story); return { line: react + story, options: opts(1), quest: null }; }
+    if (r === 2) {
+        const ask = (memory?.talks ?? 0) > 1 ? choose(QUESTIONS, seed) : sc.ask;
+        return { line: react + ask, options: opts(2), quest: null };
+    }
+    if (r === 3) {
+        const more = fresh.filter(l => l !== story);
+        const extra = more.length ? choose(more, seed + 3) : '';
+        if (extra) remember(extra);
+        const gossip = rumor.slice(sc.rumor.length + 1);
+        remember(gossip);
+        return { line: react + (extra ? extra + ' ' : '') + rumor, options: opts(3), quest: null };
+    }
+    if (!told(sc.trouble) && r < MAX_REPLIES) return { line: react + sc.trouble, options: opts(4), quest: null };
     const w = mind.wish;
     const quest: QuestOffer = { ...w, brief: w.why };
     const line = (tone === 2 ? 'Дерзко — но ты мне подходишь. ' : tone === 1 ? 'Награда будет. ' : react) + w.why;
