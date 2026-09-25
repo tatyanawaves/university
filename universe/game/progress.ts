@@ -42,6 +42,46 @@ export interface CreatureMemory {
     errands: { title: string; state: 'active' | 'done' | 'failed' }[];
     /** Stories it has already told the pilot, so it tells new ones next time. */
     told?: string[];
+    /** Its name, so the others can talk about it. */
+    name?: string;
+}
+
+/**
+ * What the whole world knows, shared by every creature: what the pilot has done, every line
+ * any creature has said to the pilot (none is said twice), and the order of every talk so far
+ * (none is used twice).
+ */
+export interface WorldMemory {
+    told: string[];
+    orders: string[];
+    deeds: { text: string; at: number }[];
+    kills: Record<string, number>;
+}
+
+/** Beyond these, the oldest are forgotten (the save stays small). */
+const WORLD_TOLD = 800, WORLD_ORDERS = 2000, WORLD_DEEDS = 40;
+
+export function freshWorld(): WorldMemory {
+    return { told: [], orders: [], deeds: [], kills: {} };
+}
+
+/** Everything a creature knows before it speaks: the world's memory and the others' memories. */
+export interface SharedMemory {
+    world: WorldMemory;
+    creatures: Record<string, CreatureMemory>;
+}
+
+/** A line or an order now said: the world will not hear it again. */
+export function rememberTold(w: WorldMemory, line: string) {
+    if (!w.told.includes(line)) w.told = [...w.told, line].slice(-WORLD_TOLD);
+}
+
+export function rememberOrder(w: WorldMemory, order: string) {
+    if (!w.orders.includes(order)) w.orders = [...w.orders, order].slice(-WORLD_ORDERS);
+}
+
+export function rememberDeed(w: WorldMemory, text: string, at = Date.now()) {
+    w.deeds = [...w.deeds, { text, at }].slice(-WORLD_DEEDS);
 }
 
 export interface SavedLog { missions: Mission[]; activeId: string | null }
@@ -60,6 +100,8 @@ export interface SaveData {
     savedAt: number;
     /** How far along the locals' buildings are (0…1), by planet and builder. */
     builds?: Record<string, number>;
+    /** What all the creatures know together. */
+    world?: WorldMemory;
 }
 
 const KEY = 'university_save_v1';
@@ -144,6 +186,24 @@ class Progress {
 
     memory(id: string): CreatureMemory {
         return (this.data.creatures[id] ??= { talks: 0, mood: 0, said: [], errands: [] });
+    }
+
+    /** What the creatures know together. */
+    shared(): SharedMemory {
+        const w = (this.data.world ??= freshWorld());
+        w.kills ??= {};
+        return { world: w, creatures: this.data.creatures };
+    }
+
+    /** Something the pilot did, for the creatures to hear of. */
+    deed(text: string) {
+        rememberDeed(this.shared().world, text);
+    }
+
+    /** An enemy destroyed: the creatures count them. */
+    kill(kind: string) {
+        const k = this.shared().world.kills;
+        k[kind] = (k[kind] ?? 0) + 1;
     }
 }
 

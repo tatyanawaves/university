@@ -428,6 +428,7 @@ export class Combat {
             p.score += e.def.score;
             this.removeEnemy(e);
             progress.data.stats.kills++;
+            progress.kill(e.kind);
             this.onKill?.(e.kind);
             return false;
         });

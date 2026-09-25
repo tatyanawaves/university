@@ -1127,6 +1127,7 @@ export class SurfaceGame {
             this.ctx.game.log.kill(f.kind);
             pilotState.score += f.def.score;
             progress.data.stats.kills++;
+            progress.kill(f.kind);
         }
     }
 
