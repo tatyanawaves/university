@@ -51,3 +51,9 @@ Settings → Pages → Source: **GitHub Actions**.
 Импортируйте репозиторий в Vercel (Add New → Project → `tatyanawaves/university`)
 и назовите проект `university`. Vercel сам определит Vite: команда сборки
 `npm run build`, каталог `dist`.
+
+## Unreal Engine
+
+Перенос в Unreal Engine 5.8: подключение Claude Code к редактору через Unreal MCP
+(`.mcp.json`), план переноса, генерация порталов, каталог реальных звёзд и
+экзопланет, диалоги — см. [`unreal/README.md`](unreal/README.md).

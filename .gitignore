@@ -36,3 +36,10 @@ hosting.ZGlzdA.cache
 worker/.dev.vars
 worker/.wrangler/
 vite.config.preview.ts
+
+# Unreal Engine project (unreal/): build products and caches
+unreal/**/Binaries/
+unreal/**/Intermediate/
+unreal/**/Saved/
+unreal/**/DerivedDataCache/
+unreal/**/.vs/
