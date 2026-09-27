@@ -19,6 +19,7 @@ import { ShipGame } from '../game/shipGame';
 import { Comet, makeBelt, makeComet, updateComet } from '../game/spaceObjects';
 import { generatedMissions, solarMissions } from '../game/missions';
 import { generatedCreatures, solarCreatures, TALK_KM } from '../game/creatures';
+import { systemFacts } from '../game/worldFacts';
 import { galaxyStar, STARS as GALAXY_STARS } from './galaxy';
 import { COUNT as WEB_GALAXIES, webGalaxy } from './cosmicWeb';
 import { generatedSatellites, PortalSpec, Portals, Satellites, SOLAR_SATELLITES } from '../game/stations';
@@ -121,6 +122,8 @@ export class StarSystemLevel implements Level {
     private starL: number;
     private starColor: [number, number, number];
     private bodies: Body[] = [];
+    /** True things about this system, for the creatures to tell (worldFacts.ts). */
+    private facts: string[] = [];
     private sprites!: THREE.Points;
     private labels: Labels;
     private sky: THREE.Points;
@@ -213,6 +216,7 @@ export class StarSystemLevel implements Level {
             }));
         }
         this.starColor = blackbodyRGB(this.starT);
+        this.facts = systemFacts({ name: this.system ? this.system.name : SUN.name, T: this.starT, L: this.starL }, bodies);
 
         this.addStar(starRadiusKm);
         for (const b of bodies) {
@@ -268,7 +272,7 @@ export class StarSystemLevel implements Level {
             name => this.bodies.find(b => b.name === name), text => host.toast(text), {}, true,
             {
                 creatures: this.system ? generatedCreatures(planetNames, this.system.seed) : solarCreatures(),
-                world: { system: this.title, bodies: this.bodies.filter(b => b.kind !== 'star').map(b => b.name) },
+                world: { system: this.title, bodies: this.bodies.filter(b => b.kind !== 'star').map(b => b.name), facts: this.facts },
             });
         this.satellites = new Satellites(this.scene, host.labelLayer, this.system ? generatedSatellites(planetNames) : SOLAR_SATELLITES, 1 / UNIT_KM / 1000);
         this.portals = new Portals(this.scene, host.labelLayer, this.portalSpecs(), spec => {
@@ -641,6 +645,7 @@ export class StarSystemLevel implements Level {
                 systemKey: this.system ? `sys:${this.system.seed}` : 'sys:sun',
                 system: this.title,
                 bodies: this.bodies.filter(x => x.kind !== 'star').map(x => x.name),
+                facts: this.facts,
             },
         });
     }

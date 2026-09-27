@@ -7,6 +7,7 @@ import { Mission } from '../game/missions';
 import { Scatter } from '../game/scatter';
 import { SurfaceGame } from '../game/surface';
 import { beingsFor, foesFor } from '../game/surfaceLife';
+import { surfaceFacts } from '../game/worldFacts';
 import type { PlanetKind } from '../mandelbrot';
 import { fmtNum } from '../physics';
 import { SKY_FRAG, SKY_VERT, TERRAIN_FRAG, TERRAIN_VERT, WATER_FRAG, WATER_VERT } from '../planetShaders';
@@ -24,6 +25,8 @@ export interface PlanetVisit {
     /** The system's name and its bodies, for the jobs the locals hand out. */
     system?: string;
     bodies?: string[];
+    /** True things about the system, for the locals to tell. */
+    facts?: string[];
 }
 
 const REACH = 90_000; // m, terrain radius around the camera
@@ -237,7 +240,10 @@ export class PlanetLevel implements Level {
             scene: this.scene, canvas: host.canvas, toast: t => host.toast(t), game: this.game,
             groundAt: (x, z) => this.groundAt(x, z), sea: s.sea, gravity: visit.gravity, planet: visit.name,
             systemKey: visit.systemKey,
-            world: { system: visit.system ?? 'эта система', bodies: visit.bodies ?? [visit.name], surface: { body: visit.name, foes, item: look.item } },
+            world: {
+                system: visit.system ?? 'эта система', bodies: visit.bodies ?? [visit.name], surface: { body: visit.name, foes, item: look.item },
+                facts: surfaceFacts(visit.name, visit.gravity, visit.dayDays, !!a, visit.facts ?? []),
+            },
             beings: beingsFor(world), foes,
             itemColor: itemColor(visit.name, mat.feature),
             dustColor: new THREE.Color(...mat.a).multiplyScalar(1.4),
